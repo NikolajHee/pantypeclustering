@@ -1,7 +1,7 @@
 from abc import abstractmethod
 
 import lightning
-from models.priors import BasePrior
+from pantypeclustering.models.priors import BasePrior
 from torch import Tensor, nn
 from torch.distributions import Distribution
 

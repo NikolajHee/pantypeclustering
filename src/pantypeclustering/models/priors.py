@@ -3,7 +3,7 @@ from abc import abstractmethod
 import lightning
 import torch
 import torch.nn.functional as f
-from models.distributions import ReparameterizedDiagonalGaussian
+from pantypeclustering.models.distributions import ReparameterizedDiagonalGaussian
 from torch import Tensor, nn
 
 
@@ -41,7 +41,7 @@ class BasePrior(lightning.LightningModule):
 
 class MixtureOfGaussian(BasePrior):
     def __init__(self, latent_dim: int, num_clusters: int, batch_size: int):
-        super().__init__()  # pyright: ignore[reportUnknownMemberType]
+        super().__init__()
 
         self.L = latent_dim
         self.K = num_clusters

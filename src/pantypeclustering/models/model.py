@@ -3,11 +3,11 @@ from typing import Any, Mapping, Union
 import lightning
 import torch
 from loguru import logger
-from models.basemodel import BaseModel
-from models.distributions import ReparameterizedDiagonalGaussian
-from models.priors import BasePrior, MixtureOfGaussian
-from models.utils import fig_to_image, tsne_plot
 from numpy.typing import NDArray
+from pantypeclustering.models.basemodel import BaseModel
+from pantypeclustering.models.distributions import ReparameterizedDiagonalGaussian
+from pantypeclustering.models.priors import BasePrior, MixtureOfGaussian
+from pantypeclustering.models.utils import fig_to_image, tsne_plot
 from sklearn.manifold import TSNE
 from sklearn.metrics import (
     calinski_harabasz_score,
@@ -32,6 +32,7 @@ class ModelVAE(BaseModel):
         input_shape: tuple[int, int, int],  # (C,W,H)
         latent_features: int,
         batch_size: int,
+        clamp: bool = False,
     ) -> None:
         super().__init__(
             encoder=encoder,
@@ -41,6 +42,7 @@ class ModelVAE(BaseModel):
             prior=prior,
             batch_size=batch_size,
         )
+        self.clamp = clamp
         if self.logger:
             self.logger.log_hyperparams(
                 {
@@ -50,14 +52,16 @@ class ModelVAE(BaseModel):
             )
 
     def posterior(self, x: Tensor) -> Distribution:
-        """q(z|x) = N(z | mu(x), sigma(x))"""
+        """q(z|x)"""
 
         h_x = self.encoder(x)
         mu, log_sigma = h_x.chunk(2, dim=-1)
 
         # Constrain log_sigma to prevent numerical instability
         # Clamp to reasonable range: exp(-10) ≈ 4.5e-5, exp(2) ≈ 7.4
-        log_sigma = torch.clamp(log_sigma, min=-10, max=2)
+
+        if self.clamp:
+            log_sigma = torch.clamp(log_sigma, min=-10, max=2)
 
         return ReparameterizedDiagonalGaussian(mu, log_sigma)
 
@@ -70,14 +74,15 @@ class ModelVAE(BaseModel):
         # Apply sigmoid to mu to constrain to [0, 1] for MNIST pixel values
         mu = torch.sigmoid(mu)
         # Constrain log_sigma to reasonable range to prevent extreme values
-        log_sigma = torch.clamp(log_sigma, min=-10, max=0)
+        if self.clamp:
+            log_sigma = torch.clamp(log_sigma, min=-10, max=0)
 
         return ReparameterizedDiagonalGaussian(mu, log_sigma)
 
     def forward(self, x: Tensor) -> tuple[Distribution, Distribution, Tensor]:
         """
-        compute the posterior q(z|x) (encoder),
-        sample z~q(z|x),
+        determine distribution of z | x by using q(z|x),
+        sample z from q(z|x)
         and return the distribution p(x|z) (decoder)
         """
 
@@ -105,11 +110,9 @@ class VariationalAutoencoder(lightning.LightningModule):
         model: BaseModel,
         input_shape: tuple[int, int, int],
         beta: float,
+        learning_rate: float,
         val_num_images: int = 5,
-        learning_rate: float = 1e-4,
     ) -> None:
-        # self.logger.log_hyperparams()
-
         super().__init__()
         self.model = model
         self.input_shape = input_shape
@@ -313,12 +316,6 @@ class VariationalAutoencoder(lightning.LightningModule):
             },
         )
 
-    def _determine_supervised_metrics(
-        self,
-        latent_points: Tensor,
-        labels: Tensor,
-    ): ...
-
     def _determine_assignments(self, latent_points: Tensor) -> Tensor:
         def _similarity_score(latent_points: Tensor, cluster_centers: Tensor):
             return torch.cdist(latent_points, cluster_centers)
@@ -326,6 +323,12 @@ class VariationalAutoencoder(lightning.LightningModule):
         similarities = _similarity_score(latent_points, self.prototypes)
 
         return torch.argmin(similarities, dim=1)
+
+    def _determine_supervised_metrics(
+        self,
+        latent_points: Tensor,
+        labels: Tensor,
+    ): ...
 
     @property
     def prototypes(self) -> Tensor:
