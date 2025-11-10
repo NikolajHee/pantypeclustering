@@ -2,15 +2,16 @@ import os
 import time
 
 import lightning
-from config import get_training_parameters
 from lightning.pytorch.loggers import TensorBoardLogger
 from loguru import logger
-from models.architectures import CNNDecoder, CNNEncoder
-from models.model import ModelVAE, VariationalAutoencoder
-from models.priors import MixtureOfGaussian
 from torch.utils.data import DataLoader
 from torchvision.datasets import MNIST
 from torchvision.transforms import ToTensor
+
+from pantypeclustering.config import get_training_parameters
+from pantypeclustering.models.architectures import CNNDecoder, CNNEncoder
+from pantypeclustering.models.model import ModelVAE, VariationalAutoencoder
+from pantypeclustering.models.priors import MixtureOfGaussian
 
 curr_time = time.strftime("%H:%M:%S", time.localtime())
 curr_date = time.strftime("%Y:%m:%d", time.localtime())
@@ -62,14 +63,14 @@ def main() -> None:
         learning_rate=cfg.learning_rate,
     )
 
-    logger_ = TensorBoardLogger("", version=f"{cfg.version}_{curr_time}_{curr_date}")
+    _logger = TensorBoardLogger("", version=f"{cfg.version}_{curr_time}_{curr_date}")
 
     trainer = lightning.Trainer(
         limit_train_batches=cfg.num_train_batches,
         limit_val_batches=cfg.num_test_batches,
         max_epochs=cfg.max_epochs,
-        logger=logger_,
-        gradient_clip_val=1.0,  # Changed from 1e-3 to 1.0 for better learning
+        logger=_logger,
+        gradient_clip_val=cfg.gradient_clipping_value,
     )
     trainer.fit(
         model=vae,

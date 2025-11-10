@@ -32,6 +32,8 @@ class TrainParameters(BaseSettings):
     num_train_batches: int = 3750
     num_test_batches: int = 1000
 
+    gradient_clipping_value: float = 1.0
+
 
 @lru_cache(maxsize=1)
 def get_training_parameters() -> TrainParameters:
