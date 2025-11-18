@@ -1,9 +1,69 @@
 # define the models, evaluator and optimizer
+import math
 
+import torch
 from torch import Tensor, nn
 
 
-class CNNEncoder(nn.Module):
+class BaseEncoder(nn.Module): ...
+
+
+class BaseDecoder(nn.Module): ...
+
+
+class FFEncoderMNIST(BaseEncoder):
+    """Feedforward encoder for MNIST"""
+
+    input_shape = (1, 28, 28)
+
+    def __init__(
+        self,
+        latent_dim: int,
+        hidden_dim: int,
+    ) -> None:
+        super().__init__()  # pyright: ignore[reportUnknownMemberType]
+        self.input_size = math.prod(self.input_shape)
+
+        self.fc1 = nn.Linear(self.input_size, hidden_dim)
+        self.fc21 = nn.Linear(hidden_dim, latent_dim)
+        self.fc22 = nn.Linear(hidden_dim, latent_dim)
+
+    def forward(self, x: Tensor) -> tuple[Tensor, Tensor]:
+        x = x.view(-1, self.input_size)
+        h1 = torch.tanh(self.fc1(x))
+        mean, log_var = self.fc21(h1), self.fc22(h1)
+        return mean, log_var
+
+
+class FFDecoderMNIST(BaseDecoder):
+    """Feedforward decoder for MNIST"""
+
+    input_shape = (1, 28, 28)
+
+    def __init__(
+        self,
+        latent_dim: int,
+        hidden_dim: int,
+    ) -> None:
+        super().__init__()  # pyright: ignore[reportUnknownMemberType]
+        self.input_size = math.prod(self.input_shape)
+
+        self.fc3 = nn.Linear(latent_dim, hidden_dim)
+        self.fc41 = nn.Linear(hidden_dim, self.input_size)
+        self.fc42 = nn.Linear(hidden_dim, self.input_size)
+
+    def forward(self, z: Tensor) -> tuple[Tensor, Tensor]:
+        h3 = torch.tanh(self.fc3(z))
+
+        mean, log_var = torch.sigmoid(self.fc41(h3)), self.fc42(h3)
+
+        mean = mean.view(-1, *self.input_shape)
+        log_var = log_var.view(-1, *self.input_shape)
+
+        return (mean, log_var)
+
+
+class CNNEncoder(BaseEncoder):
     def __init__(self, latent_dim: int) -> None:
         super().__init__()  # pyright: ignore[reportUnknownMemberType]
         self.encoder = nn.Sequential(
@@ -15,24 +75,24 @@ class CNNEncoder(nn.Module):
             nn.ReLU(),
             nn.Flatten(),
         )
-        self.fc = nn.Linear(in_features=64 * 7 * 7, out_features=2 * latent_dim)
+        self.fc1 = nn.Linear(in_features=64 * 7 * 7, out_features=2 * latent_dim)
 
-        # Initialize the final layer with smaller weights for stability
-        # This helps prevent log_sigma from starting too large
-        nn.init.xavier_uniform_(self.fc.weight, gain=0.1)
-        nn.init.zeros_(self.fc.bias)
-
-    def forward(self, x: Tensor) -> Tensor:
+    def forward(self, x: Tensor) -> tuple[Tensor, Tensor]:
         z = self.encoder(x)
-        z = self.fc(z)
-        return z
+
+        h = torch.tanh(self.fc1(z))
+
+        mean, log_var = h.chunk(2, dim=1)
+
+        return mean, log_var
 
 
-class CNNDecoder(nn.Module):
+class CNNDecoder(BaseDecoder):
     def __init__(self, latent_dim: int) -> None:
         super().__init__()  # pyright: ignore[reportUnknownMemberType]
         self.to_decoder = nn.Linear(in_features=latent_dim, out_features=64 * 7 * 7)
         final_conv = nn.ConvTranspose2d(32, 2 * 1, 4, 2, 1)
+
         self.decoder = nn.Sequential(
             nn.ReLU(),
             nn.ConvTranspose2d(64, 32, 4, 2, 1),
@@ -40,13 +100,9 @@ class CNNDecoder(nn.Module):
             final_conv,
         )
 
-        # Initialize the final conv layer with smaller weights for stability
-        nn.init.xavier_uniform_(final_conv.weight, gain=0.1)
-        if final_conv.bias is not None:
-            nn.init.zeros_(final_conv.bias)
-
-    def forward(self, z: Tensor) -> Tensor:
+    def forward(self, z: Tensor) -> tuple[Tensor, Tensor]:
         x = self.to_decoder(z)
         x = x.reshape(-1, 64, 7, 7)  # TODO: remove hardcoding?
         x = self.decoder(x)
-        return x
+        mean, log_var = x.chunk(2, dim=1)
+        return (mean, log_var)

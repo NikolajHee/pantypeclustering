@@ -4,6 +4,8 @@ from torch.distributions import Distribution
 
 class ReparameterizedDiagonalGaussian(Distribution):
     """
+    CHANGE TO TORCH
+
     A distribution `N(y | mu, sigma I)` compatible with
     the reparameterization trick given `epsilon ~ N(0, 1)`.
     """
@@ -30,7 +32,7 @@ class ReparameterizedDiagonalGaussian(Distribution):
 
     def rsample(self) -> torch.Tensor:  # pyright: ignore[reportIncompatibleMethodOverride]
         """sample `z ~ N(z | mu, sigma)` (with the reparameterization trick)"""
-        return self.mu + self.sigma * self.sample_epsilon()  # <- your code
+        return self.mu + self.sigma * self.sample_epsilon()
 
     def log_prob(  # pyright: ignore[reportIncompatibleMethodOverride]
         self,

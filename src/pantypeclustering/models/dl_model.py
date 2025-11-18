@@ -1,29 +1,29 @@
+import math
 from typing import Any, Mapping, Union
 
-import lightning
+import matplotlib.pyplot as plt
 import torch
 from loguru import logger
 from numpy.typing import NDArray
-from pantypeclustering.models.basemodel import BaseModel
-from pantypeclustering.models.distributions import ReparameterizedDiagonalGaussian
-from pantypeclustering.models.priors import BasePrior, MixtureOfGaussian
-from pantypeclustering.models.utils import fig_to_image, tsne_plot
 from sklearn.manifold import TSNE
 from sklearn.metrics import (
-    calinski_harabasz_score,
+    adjusted_rand_score,
     davies_bouldin_score,
     silhouette_score,  # pyright: ignore[reportUnknownVariableType]
 )
 from torch import Tensor, nn
 from torch.distributions import Distribution
 
+from pantypeclustering.components.distributions import ReparameterizedDiagonalGaussian
+from pantypeclustering.components.priors import BasePrior, MixtureOfGaussian
+from pantypeclustering.models.basemodel import BaseModel, BaseVAE
+from pantypeclustering.models.utils import reduce
+from pantypeclustering.utils import tsne_plot
 
-def reduce(x: Tensor) -> Tensor:
-    """for each datapoint: sum over all dimensions"""
-    return x.view(x.size(0), -1).sum(dim=1)
+pi = torch.tensor([math.pi]).to("mps")
 
 
-class ModelVAE(BaseModel):
+class ModelVAEDL(BaseModel):
     def __init__(
         self,
         encoder: nn.Module,
@@ -54,8 +54,7 @@ class ModelVAE(BaseModel):
     def posterior(self, x: Tensor) -> Distribution:
         """q(z|x)"""
 
-        h_x = self.encoder(x)
-        mu, log_sigma = h_x.chunk(2, dim=-1)
+        mu, log_sigma = self.encoder(x)
 
         # Constrain log_sigma to prevent numerical instability
         # Clamp to reasonable range: exp(-10) ≈ 4.5e-5, exp(2) ≈ 7.4
@@ -68,11 +67,8 @@ class ModelVAE(BaseModel):
     def observation_model(self, z: Tensor) -> Distribution:
         """p(x|z) = N(x | mu(z), sigma(z))"""
 
-        px_logits = self.decoder(z)
-        mu, log_sigma = px_logits.chunk(2, dim=1)
+        mu, log_sigma = self.decoder(z)
 
-        # Apply sigmoid to mu to constrain to [0, 1] for MNIST pixel values
-        mu = torch.sigmoid(mu)
         # Constrain log_sigma to reasonable range to prevent extreme values
         if self.clamp:
             log_sigma = torch.clamp(log_sigma, min=-10, max=0)
@@ -92,13 +88,13 @@ class ModelVAE(BaseModel):
         # sample the posterior using the reparameterization trick: z ~ q(z | x)
         z = qz.rsample()
 
-        # define the observation model p(x|z) = B(x | g(z))
+        # define the observation model p(x|z) = N
         px = self.observation_model(z)
 
         return (px, qz, z)
 
 
-class VariationalAutoencoder(lightning.LightningModule):
+class VariationalAutoencoderDL(BaseVAE):
     """A Variational Autoencoder with
     * a Bernoulli observation model `p_theta(x | z) = B(x | g_theta(z))`
     * a Gaussian prior `p(z) = N(z | 0, I)`
@@ -119,13 +115,6 @@ class VariationalAutoencoder(lightning.LightningModule):
         self.beta = beta
         self.val_num_images = val_num_images
         self.learning_rate = learning_rate
-        if self.logger:
-            self.logger.log_hyperparams(
-                {
-                    "beta": self.beta,
-                    "learning_rate": self.learning_rate,
-                },
-            )
 
         self.reset_save()
 
@@ -148,7 +137,6 @@ class VariationalAutoencoder(lightning.LightningModule):
 
         beta_elbo = (log_px) - (self.beta * kl)
 
-        # loss
         loss = -beta_elbo.mean()
 
         # Check for NaN/Inf and replace with a large but finite value
@@ -157,19 +145,35 @@ class VariationalAutoencoder(lightning.LightningModule):
             loss = torch.tensor(1e6, device=loss.device, dtype=loss.dtype, requires_grad=True)
 
         self.log("train_loss", loss, prog_bar=True)
-        if batch_idx == 0:
+        if (batch_idx == 0) and (self.current_epoch % 10 == 0):
             reconstructed_images = px.sample()
             reconstructed_images = reconstructed_images.view(-1, *self.input_shape)
 
             original_images = x.view(-1, *self.input_shape)
 
-            train_images = torch.vstack((original_images, reconstructed_images))
+            for i, (org_img, recon_img) in enumerate(
+                zip(
+                    original_images,
+                    reconstructed_images,
+                    strict=False,
+                ),
+            ):
+                fig, ax = plt.subplots(1, 2)
 
-            self.logger.experiment.add_images(  # type: ignore
-                "train_images",
-                train_images,
-                self.global_step,
-            )
+                ax[0].imshow(org_img.detach().cpu().squeeze(), cmap="gray")
+                ax[1].imshow(recon_img.detach().cpu().squeeze(), cmap="gray")
+                ax[0].axis("off")
+                ax[1].axis("off")
+
+                self.logger.experiment.log_figure(
+                    self.logger.run_id,
+                    fig,
+                    f"training/train_img_e{self.current_epoch}_n{i}.png",
+                )
+                plt.close("all")
+
+                if i >= self.val_num_images:
+                    break
 
         return loss
 
@@ -197,20 +201,36 @@ class VariationalAutoencoder(lightning.LightningModule):
         self.val_labels.append(batch[1].cpu())
         self.val_latents.append(z.detach().cpu())
 
-        if batch_idx <= self.val_num_images:
+        if (batch_idx <= self.val_num_images) and (self.current_epoch % 10 == 0):
             reconstructed_images = px.sample()
             reconstructed_images = reconstructed_images.view(-1, *self.input_shape)
 
             original_images = batch[0]
             original_images = original_images.view(-1, *self.input_shape)
 
-            test_images = torch.vstack((original_images, reconstructed_images))
+            for i, (org_img, recon_img) in enumerate(
+                zip(
+                    original_images,
+                    reconstructed_images,
+                    strict=False,
+                ),
+            ):
+                fig, ax = plt.subplots(1, 2)
 
-            self.logger.experiment.add_images(  # type: ignore
-                f"test_images_{batch_idx}",
-                test_images,
-                self.global_step,
-            )
+                ax[0].imshow(org_img.cpu().squeeze(), cmap="gray")
+                ax[1].imshow(recon_img.cpu().squeeze(), cmap="gray")
+                ax[0].axis("off")
+                ax[1].axis("off")
+
+                self.logger.experiment.log_figure(
+                    self.logger.run_id,
+                    fig,
+                    f"validation/validation_img_e{self.current_epoch}_n{i}.png",
+                )
+                plt.close("all")
+
+                if i > self.val_num_images:
+                    break
 
         if type(self.model.prior) is MixtureOfGaussian:
             prototypes = self.model.prior.means
@@ -237,20 +257,55 @@ class VariationalAutoencoder(lightning.LightningModule):
     def on_validation_epoch_end(self) -> None:
         if len(self.val_latents) > 30:
             latent_points = torch.cat(self.val_latents, dim=0)
+            latent_points_np = latent_points.numpy()
             labels = torch.cat(self.val_labels, dim=0)
+            labels_np = labels.numpy()
 
-            if type(self.model.prior) is MixtureOfGaussian:
+            metrics = {}
+
+            # UNLABELLED STUFF
+            if self._calculate_unlabelled_stuff and self._clustering:
+                assignments = self._determine_assignments(latent_points)
+
+                db_sc_unlabelled = davies_bouldin_score(
+                    X=latent_points_np,
+                    labels=assignments,
+                )
+
+                silhouette_sc_unlabelled = float(
+                    silhouette_score(
+                        X=latent_points_np,
+                        labels=assignments,
+                    ),
+                )
+
+                metrics["davies_bouldin_score_unlabelled"] = db_sc_unlabelled
+                metrics["silhouette_sc_unlabelled"] = silhouette_sc_unlabelled
+
+                if self._calculate_labelled_stuff:
+                    rand_score = adjusted_rand_score(labels_np, assignments)
+
+                    metrics["rand_score"] = rand_score
+
+            # LABELLED STUFF
+            if self._calculate_labelled_stuff:
                 self._tsne(latent_points, labels)
 
-                # calculate metrics
-                self._determine_unsupervised_metrics(
-                    latent_points=latent_points,
+                db_sc_labelled = davies_bouldin_score(
+                    X=latent_points_np,
+                    labels=labels_np,
+                )
+                silhouette_sc_labelled = float(
+                    silhouette_score(
+                        X=latent_points_np,
+                        labels=labels_np,
+                    ),
                 )
 
-                self._determine_supervised_metrics(
-                    latent_points=latent_points,
-                    labels=labels,
-                )
+                metrics["davies_bouldin_score_labelled"] = db_sc_labelled
+                metrics["silhouette_sc_labelled"] = silhouette_sc_labelled
+
+            self.logger.log_metrics(metrics=metrics)
 
     def _tsne(self, latent_points: Tensor, labels: Tensor):
         def fit_tsne(_latents_np: NDArray[Any]):
@@ -277,44 +332,12 @@ class VariationalAutoencoder(lightning.LightningModule):
 
         fig = tsne_plot(tsne_result, labels_np, means=tsne_means)
 
-        tsne_result_image = fig_to_image(fig)
-
-        self.logger.experiment.add_images(  # type: ignore
-            "tsne",
-            tsne_result_image[None,],
-            self.global_step,
+        self.logger.experiment.log_figure(
+            self.logger.run_id,
+            fig,
+            "tsne/tsne.png",
         )
-
-    def _determine_unsupervised_metrics(
-        self,
-        latent_points: Tensor,
-    ) -> None:
-        assignments = self._determine_assignments(latent_points)
-
-        latent_points_np = latent_points.numpy()
-
-        calinski_harabasz_sc = calinski_harabasz_score(
-            X=latent_points_np,
-            labels=assignments,
-        )
-        db_sc = davies_bouldin_score(
-            X=latent_points_np,
-            labels=assignments,
-        )
-        silhouette_sc = float(
-            silhouette_score(
-                X=latent_points_np,
-                labels=assignments,
-            ),
-        )
-
-        self.logger.log_metrics(  # pyright: ignore[reportOptionalMemberAccess]
-            {
-                "calinski_harabasz_score": calinski_harabasz_sc,
-                "db_score": db_sc,
-                "silhouette_score": silhouette_sc,
-            },
-        )
+        plt.close("all")
 
     def _determine_assignments(self, latent_points: Tensor) -> Tensor:
         def _similarity_score(latent_points: Tensor, cluster_centers: Tensor):
@@ -323,12 +346,6 @@ class VariationalAutoencoder(lightning.LightningModule):
         similarities = _similarity_score(latent_points, self.prototypes)
 
         return torch.argmin(similarities, dim=1)
-
-    def _determine_supervised_metrics(
-        self,
-        latent_points: Tensor,
-        labels: Tensor,
-    ): ...
 
     @property
     def prototypes(self) -> Tensor:

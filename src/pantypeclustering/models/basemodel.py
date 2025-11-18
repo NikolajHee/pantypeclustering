@@ -1,9 +1,10 @@
 from abc import abstractmethod
+from typing import Any
 
 import lightning
-from pantypeclustering.models.priors import BasePrior
 from torch import Tensor, nn
-from torch.distributions import Distribution
+
+from pantypeclustering.components.priors import BasePrior
 
 
 class BaseModel(lightning.LightningModule):
@@ -24,12 +25,16 @@ class BaseModel(lightning.LightningModule):
         self.input_shape = input_shape
         self.latent_features = latent_features
         self.prior = prior
+        self.batch_size = batch_size
 
     @abstractmethod
-    def posterior(self, x: Tensor) -> Distribution: ...
+    def posterior(self, x: Tensor) -> Any: ...
 
     @abstractmethod
-    def observation_model(self, z: Tensor) -> Distribution: ...
+    def observation_model(self, z: Tensor) -> Any: ...
 
     @abstractmethod
-    def forward(self, x: Tensor) -> tuple[Distribution, Distribution, Tensor]: ...
+    def forward(self, x: Tensor) -> Any: ...
+
+
+class BaseVAE(lightning.LightningModule): ...

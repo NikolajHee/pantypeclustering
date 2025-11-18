@@ -3,7 +3,7 @@ from abc import abstractmethod
 import lightning
 import torch
 import torch.nn.functional as f
-from pantypeclustering.models.distributions import ReparameterizedDiagonalGaussian
+from pantypeclustering.components.distributions import ReparameterizedDiagonalGaussian
 from torch import Tensor, nn
 
 

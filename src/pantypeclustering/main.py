@@ -2,16 +2,15 @@ import os
 import time
 
 import lightning
-from lightning.pytorch.loggers import TensorBoardLogger
+from lightning.pytorch.callbacks import LearningRateMonitor
+from lightning.pytorch.loggers import MLFlowLogger
 from loguru import logger
 from torch.utils.data import DataLoader
 from torchvision.datasets import MNIST
 from torchvision.transforms import ToTensor
 
 from pantypeclustering.config import get_training_parameters
-from pantypeclustering.models.architectures import CNNDecoder, CNNEncoder
-from pantypeclustering.models.model import ModelVAE, VariationalAutoencoder
-from pantypeclustering.models.priors import MixtureOfGaussian
+from pantypeclustering.orchestrator import Orchestrator
 
 curr_time = time.strftime("%H:%M:%S", time.localtime())
 curr_date = time.strftime("%Y:%m:%d", time.localtime())
@@ -33,6 +32,7 @@ def main() -> None:
 
     test_dataloader = DataLoader(  # type: ignore
         test_dataset,
+        batch_size=cfg.val_batch_size,
         num_workers=cfg.num_workers,
         persistent_workers=True,
     )
@@ -40,40 +40,26 @@ def main() -> None:
     logger.info(f"len of train: {len(train_dataset)}")
     logger.info(f"len of test: {len(test_dataset)}")
 
-    prior = MixtureOfGaussian(
-        latent_dim=cfg.latent_dim,
-        num_clusters=cfg.num_of_clusters,
-        batch_size=cfg.batch_size,
-    )
-    # prior = UnivariateGaussian(cfg.latent_dim)
+    orchestrator = Orchestrator(cfg)
 
-    model_vae = ModelVAE(
-        CNNEncoder(cfg.latent_dim),
-        CNNDecoder(cfg.latent_dim),
-        prior=prior,
-        input_shape=cfg.input_shape,
-        latent_features=cfg.latent_dim,
-        batch_size=cfg.batch_size,
+    mlf_logger = MLFlowLogger(
+        experiment_name="lightning_logs",
+        run_name=f"{curr_date}_{curr_time}",
+        tracking_uri="http://127.0.0.1:5000",
     )
+    lr_monitor = LearningRateMonitor(logging_interval="step")
 
-    vae = VariationalAutoencoder(
-        model_vae,
-        input_shape=cfg.input_shape,
-        beta=cfg.beta,
-        learning_rate=cfg.learning_rate,
-    )
-
-    _logger = TensorBoardLogger("", version=f"{cfg.version}_{curr_time}_{curr_date}")
+    mlf_logger.log_hyperparams(cfg.model_dump())
 
     trainer = lightning.Trainer(
         limit_train_batches=cfg.num_train_batches,
         limit_val_batches=cfg.num_test_batches,
         max_epochs=cfg.max_epochs,
-        logger=_logger,
-        gradient_clip_val=cfg.gradient_clipping_value,
+        logger=mlf_logger,
+        callbacks=[lr_monitor],
     )
     trainer.fit(
-        model=vae,
+        model=orchestrator.vae,
         train_dataloaders=train_dataloader,  # pyright: ignore[reportUnknownArgumentType]
         val_dataloaders=test_dataloader,  # pyright: ignore[reportUnknownArgumentType]
     )
