@@ -1,0 +1,82 @@
+[project]
+name = "pantypeclustering"
+version = "0.1.0"
+authors = [
+  {name="Nikolaj Hertz"}
+]
+description = "Special course examining the use of Pantypes and VAEs"
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "ipykernel>=7.0.1",
+    "lightning>=2.5.5",
+    "loguru>=0.7.3",
+    "matplotlib>=3.10.7",
+    "mlflow>=3.6.0",
+    "numpy>=2.3.3",
+    "pre-commit>=4.3.0",
+    "psycopg2>=2.9.11",
+    "pydantic-settings>=2.11.0",
+    "scikit-learn>=1.7.2",
+    "seaborn>=0.13.2",
+    "tensorboard>=2.20.0",
+    "torch>=2.8.0",
+    "torchvision>=0.23.0",
+]
+
+[project.scripts]
+main = "pantypeclustering.main:main"
+
+[tool.uv]
+package=true
+
+[build-system]
+requires = ["uv_build>0.8.12,<0.10.0"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-root = "src/"
+
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+exclude=["typings/", "*.pyi"]
+
+[tool.ruff.lint]
+select = [
+  "ANN001",
+  "ANN201",
+  "ARG001",
+  "B",
+  "C4",
+  "C90",
+  "DTZ",
+  "E",
+  "F",
+  "I",
+  "N",
+  "PD",
+  "PLE",
+  "RUF100",
+  "SIM",
+  "W",
+]
+
+fixable = ["ALL"]
+unfixable = []
+
+[tool.pyright]
+extraPaths = []
+
+include = ["src"]
+exclude =[
+]
+
+pythonVersion = "3.12"
+typeCheckingMode = "strict"
+reportImportCycles = true
+reportPrivateUsage = true
+reportCallInDefaultInitializer = true
+reportImplicitStringConcatenation = true
+reportMissingTypeStubs = false
