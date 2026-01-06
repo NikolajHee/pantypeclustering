@@ -1,10 +1,10 @@
-
-
-
 from torch import Tensor, nn
-import torch
+
 
 class Recogniser(nn.Module):
+    num_channels = 1
+    num_filters = 16
+
     def __init__(
             self,
             input_size: int,
@@ -13,21 +13,19 @@ class Recogniser(nn.Module):
             w_size: int,
             number_of_mixtures: int,
     ):
-        super().__init__()
-        nChannels = 1
-        nFilters = 16
+        super().__init__()  # type: ignore
 
         self.main_network = nn.Sequential(
-            nn.Conv2d(nChannels, nFilters, kernel_size=6, stride=1, padding=0),
-            nn.BatchNorm2d(nFilters),
+            nn.Conv2d(self.num_channels, self.num_filters, kernel_size=6, stride=1, padding=0),
+            nn.BatchNorm2d(self.num_filters),
             nn.ReLU(),
-            nn.Conv2d(nFilters, 2*nFilters, kernel_size=6, stride=1, padding=0),
-            nn.BatchNorm2d(2*nFilters),
+            nn.Conv2d(self.num_filters, 2*self.num_filters, kernel_size=6, stride=1, padding=0),
+            nn.BatchNorm2d(2*self.num_filters),
             nn.ReLU(),
-            nn.Conv2d(2*nFilters, 4*nFilters, kernel_size=4, stride=2, padding=1),
-            nn.BatchNorm2d(4*nFilters),
+            nn.Conv2d(2*self.num_filters, 4*self.num_filters, kernel_size=4, stride=2, padding=1),
+            nn.BatchNorm2d(4*self.num_filters),
             nn.ReLU(),
-            nn.Conv2d(4*nFilters, hidden_size, kernel_size=9),
+            nn.Conv2d(4*self.num_filters, hidden_size, kernel_size=9),
             nn.BatchNorm2d(hidden_size),
             nn.ReLU()
         )
@@ -37,26 +35,29 @@ class Recogniser(nn.Module):
         self.mean_w = nn.Linear(hidden_size, w_size)
         self.logVar_w = nn.Linear(hidden_size, w_size)
 
-    def forward(self, x: Tensor):
-        B, C, W, H = x.shape
+    def forward(self, x: Tensor) -> tuple[tuple[Tensor, Tensor], tuple[Tensor, Tensor]]:
+        batch_size, _, _, _ = x.shape
+
         hidden = self.main_network(x)
 
-        hidden = hidden.reshape(B, -1)
+        hidden = hidden.reshape(batch_size, -1)
 
         mean_x = self.mean_x(hidden)
-        logVar_x = self.logVar_x(hidden)
+        logvar_x = self.logVar_x(hidden)
 
         mean_w = self.mean_w(hidden)
-        logVar_w = self.logVar_w(hidden)
+        logvar_w = self.logVar_w(hidden)
 
-        return (mean_x, logVar_x), (mean_w, logVar_w)
+        return (mean_x, logvar_x), (mean_w, logvar_w)
 
 
 class YGenerator(nn.Module):
+    num_channels = 1
+    num_filters = 16
+
     def __init__(self, input_size: int, hidden_size: int, output_size: int, continuous: bool):
-        super().__init__()
-        nChannels = 1
-        nFilters = 16
+        super().__init__()  # type: ignore
+
         self.hidden_size = hidden_size
 
         self.projection_layer = nn.Sequential(
@@ -65,31 +66,32 @@ class YGenerator(nn.Module):
             nn.ReLU()
         )
         self.main_network = nn.Sequential(
-            nn.ConvTranspose2d(hidden_size, 4*nFilters, kernel_size=9),
-            nn.BatchNorm2d(4*nFilters),
+            nn.ConvTranspose2d(hidden_size, 4*self.num_filters, kernel_size=9),
+            nn.BatchNorm2d(4*self.num_filters),
             nn.ReLU(),
-            nn.ConvTranspose2d(4*nFilters, 2*nFilters, kernel_size=4, stride=2, padding=1),
-            nn.BatchNorm2d(2*nFilters),
+            nn.ConvTranspose2d(4*self.num_filters, 2*self.num_filters, kernel_size=4, stride=2, padding=1),
+            nn.BatchNorm2d(2*self.num_filters),
             nn.ReLU(),
-            nn.ConvTranspose2d(2*nFilters, nFilters, kernel_size=6, stride=1, padding=0),
-            nn.BatchNorm2d(nFilters),
+            nn.ConvTranspose2d(2*self.num_filters, self.num_filters, kernel_size=6, stride=1, padding=0),
+            nn.BatchNorm2d(self.num_filters),
             nn.ReLU(),
-            nn.ConvTranspose2d(nFilters, nChannels, kernel_size=6, stride=1, padding=0),
-            nn.BatchNorm2d(nChannels),
+            nn.ConvTranspose2d(self.num_filters, self.num_channels, kernel_size=6, stride=1, padding=0),
+            nn.BatchNorm2d(self.num_channels),
             nn.Sigmoid(),
         )
 
-    def forward(self, inputTensor: Tensor):
-        hidden = self.projection_layer(inputTensor)
+    def forward(self, input_tensor: Tensor) -> Tensor:
+        hidden = self.projection_layer(input_tensor)
         hidden = hidden.view(-1, self.hidden_size, 1, 1)
         y = self.main_network(hidden)
         return y
+
 
 class PriorGenerator(nn.Module):
     def __init__(
             self, input_size: int, hidden_size: int, output_size: int, number_of_mixtures: int
     ):
-        super().__init__()
+        super().__init__()  # type: ignore
         self.projection_layer = nn.Sequential(
             nn.Linear(input_size, hidden_size),
             nn.Tanh(),
@@ -102,12 +104,10 @@ class PriorGenerator(nn.Module):
             nn.Linear(hidden_size, output_size) for _ in range(number_of_mixtures)
         ])
 
-    def forward(self, inputTensor: Tensor):
-        hidden = self.projection_layer(inputTensor)
-        means = [l(hidden) for l in self.mixture_means]
-        logvars = [l(hidden) for l in self.mixture_logvars]
+    def forward(self, input_tensor: Tensor) -> tuple[list[Tensor], list[Tensor]]:
+        hidden = self.projection_layer(input_tensor)
+
+        means = [linear(hidden) for linear in self.mixture_means]
+        logvars = [linear(hidden) for linear in self.mixture_logvars]
 
         return (means, logvars)
-
-
-

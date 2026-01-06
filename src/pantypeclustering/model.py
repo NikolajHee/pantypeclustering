@@ -1,132 +1,172 @@
-
-
 import torch
 from torch import Tensor, nn
-from torch.distributions import LogNormal, Normal
+from torch.distributions import Normal
 
-from pantypeclustering.architectures.conv import Recogniser, YGenerator, PriorGenerator
-from pantypeclustering.dataloader import get_mnist_dataloaders
+from pantypeclustering.architectures.conv import PriorGenerator, Recogniser, YGenerator
+
+from sklearn.metrics import (
+    davies_bouldin_score,
+    silhouette_score,  # pyright: ignore[reportUnknownVariableType]
+    adjusted_rand_score,
+)
 
 
 class GMVAE(nn.Module):
     def __init__(
             self,
-            recogniser: Recogniser,
-            ygenerator: YGenerator,
-            priorgenerator: PriorGenerator,
+            y_size: int,
+            x_size: int,
+            w_size: int,
+            hidden_size: int,
+            number_of_mixtures: int,
             mc: int,
             continuous: bool,
+            lambda_threshold: float,
     ):
-        super().__init__()
-        self.recogniser = recogniser
-        self.ygenerator = ygenerator
-        self.priorgenerator = priorgenerator
+        super().__init__()  # type: ignore
+
+        self.recogniser = Recogniser(
+            input_size=y_size,
+            hidden_size=hidden_size,
+            x_size=x_size,
+            w_size=w_size,
+            number_of_mixtures=number_of_mixtures
+        )
+
+        self.ygenerator = YGenerator(
+            input_size=x_size,
+            hidden_size=hidden_size,
+            output_size=y_size,
+            continuous=continuous,
+        )
+
+        self.priorgenerator = PriorGenerator(
+            input_size=w_size,
+            hidden_size=hidden_size,
+            output_size=x_size,
+            number_of_mixtures=number_of_mixtures
+        )
+
         self.mc = mc
         self.cont = continuous
+        self.lambda_threshold = lambda_threshold
+        self.x_size, self.y_size, self.w_size = x_size, y_size, w_size
+        self.hidden_size = hidden_size
+        self.number_of_mixtures = number_of_mixtures
 
 
-    def forward(self, batch: Tensor):
-        y = batch
-        (mean_x, logVar_x), (mean_w, logVar_w) = self.recogniser(y)
+    def forward(self, y: Tensor) -> Tensor:
+        (mean_x, logvar_x), (mean_w, logvar_w) = self.recogniser(y)
 
-        logVar_x = torch.clamp(logVar_x, min=-30.0, max=20.0)
-        logVar_w = torch.clamp(logVar_w, min=-30.0, max=20.0)
+        logvar_x = torch.clamp(logvar_x, min=-30.0, max=20.0)
+        logvar_w = torch.clamp(logvar_w, min=-30.0, max=20.0)
 
-        x_dist = Normal(mean_x, torch.exp(0.5 * logVar_x))
-        w_dist = Normal(mean_w, torch.exp(0.5 * logVar_w))
+        x_dist = Normal(mean_x, torch.exp(0.5 * logvar_x))
+        w_dist = Normal(mean_w, torch.exp(0.5 * logvar_w))
 
         x_sample = x_dist.rsample((self.mc,))
         w_sample = w_dist.rsample((self.mc,))
 
-        _, B, x_size = x_sample.shape # M x B x x_size
-        _, _, w_size = w_sample.shape # M x B x w_size
-
-        x_sample = x_sample.view(B*self.mc, x_size)
-        w_sample = w_sample.view(B*self.mc, w_size)
+        _, self.batch_size, _ = x_sample.shape  # M x B x x_size
+ 
+        x_sample = x_sample.view(self.batch_size * self.mc, self.x_size)
+        w_sample = w_sample.view(self.batch_size * self.mc, self.w_size)
 
         y_recon = self.ygenerator(x_sample)
-        y_recon = y_recon.view(self.mc, B, 1, 28, 28)
+        y_recon = y_recon.view(self.mc, self.batch_size, 1, 28, 28)
 
         (means, logvars) = self.priorgenerator(w_sample)
 
-        x_sample = x_sample.view(self.mc, B, x_size)
-        w_sample = w_sample.view(self.mc, B, w_size)
+        x_sample = x_sample.view(self.mc, self.batch_size, self.x_size)
+        w_sample = w_sample.view(self.mc, self.batch_size, self.w_size)
 
-        means = torch.stack([mean.view(self.mc, B, x_size) for mean in means])
-        logvars = torch.stack([logvar.view(self.mc, B, x_size) for logvar in logvars])
+        means = torch.stack([mean.view(self.mc, self.batch_size, self.x_size) for mean in means])
+        logvars = torch.stack([logvar.view(self.mc, self.batch_size, self.x_size) for logvar in logvars])
 
-        # llh
-        dist = Normal(means, torch.exp(0.5 * logvars))
-        # x_sample is [M, B, D], need [K, M, B, D] to match means
-        x_sample_expanded = x_sample.unsqueeze(0).expand(10, -1, -1, -1)
-        llh = dist.log_prob(x_sample_expanded)
-
-        # [K, M, B, D] -> [K, M, B]
-        llh = llh.sum(-1) # sum over independent log gauss prob in x-dimension
-        
-        # [K, M, B]
-        p_z = llh.softmax(dim=0) # softmax over K
+        # Compute log-likelihood
+        p_z = self.gaussian_mixture(x_sample, means, logvars)
 
         # 1.) reconstruction loss
-        if self.cont:
-            recon_criterion = nn.MSELoss(reduction='sum')
-        else:
-            recon_criterion = nn.BCELoss(reduction='sum')
-
-        recon_loss = recon_criterion(
-            y_recon,
-            y.unsqueeze(0).expand_as(y_recon)
-        ) / (self.mc * B)  # normalize by MC samples and batch size
-
+        recon_loss = self.reconstruction_loss(y=y, y_recon=y_recon)
 
         # 2.) E_z_w [KL(q(x)||p(x|z,w))]
-        K, mc, B, D = means.shape
-        B, D2 = mean_w.shape
+        exp_kl = self.conditional_kl_term(
+            mean_x=mean_x,
+            logvar_x=logvar_x,
+            means=means,
+            logvars=logvars,
+            p_z=p_z
+        )
 
-        #mean_x = mean_x.repeat(mc, 1, 1)
-        #logVar_x = logVar_x.repeat(mc, 1, 1)
-
-        var_x = logVar_x.exp()
-        var_k = logvars.exp()
-
-        kl = 0.5 * (
-            logvars - logVar_x.unsqueeze(0)
-            + (var_x.unsqueeze(0) + (mean_x.unsqueeze(0) - means)**2) / var_k
-            - 1
-        )  # [K, M, B, D]
-
-        kl = kl.sum(-1)  # [K, M, B]
-        exp_kl = (p_z * kl).mean(dim=1).sum() / B  # avg MC, sum K, normalize by batch size
-
-        
-        
         # 3.) KL( q(w) || P(w) )
-        vae_kld_loss = -0.5 * torch.sum(
-                1 + logVar_w - mean_w.pow(2) - logVar_w.exp()
-            ) / B  # normalize by batch size
+        vae_kld_loss = self.kl_term(mean_w, logvar_w)
 
-        # 4.)  CV = H(Z|X, W) = E_q(x,w) [ E_p(z|x,w)[ - log P(z|x,w)] ]
-
-        CV = torch.log(p_z + 1e-10) * p_z
-        CV = - CV.sum() / (self.mc * B)  # normalize by MC samples and batch size
-
-        _lambda = 0.5
-        # zloss should encourage diversity in cluster assignments
-        # The log(1/D2) term is the entropy of uniform prior, should not scale with B
-        zloss = - CV - torch.log(torch.tensor(1.0) / D2)
-        zloss = torch.max(zloss, torch.tensor(_lambda))
+        # 4.) CV = H(Z|X, W) = E_q(x,w) [ E_p(z|x,w)[ - log P(z|x,w)] ]
+        zloss = self.z_loss(p_z)
 
         total_loss = recon_loss + exp_kl + vae_kld_loss + zloss
-
-        # print(f"recon_loss: {recon_loss}")
-        # print(f"exp_kl_loss: {exp_kl_loss}")
-        # print(f"vae_kld_loss: {vae_kld_loss}")
-        # print(f"zloss: {zloss}")
 
 
         return total_loss, (y, y_recon)
 
-    def acc_evaluation(self, generated_label: torch.Tensor, true_label: torch.Tensor):
+    def gaussian_mixture(self, x_sample: Tensor, means: Tensor, logvars: Tensor) -> Tensor:
+        dist = Normal(means, torch.exp(0.5 * logvars))
+        # x_sample is [M, B, D], need [K, M, B, D] to match means
+        num_mixtures = means.shape[0]
+        x_sample_expanded = x_sample.unsqueeze(0).expand(num_mixtures, -1, -1, -1)
+        llh = dist.log_prob(x_sample_expanded)
+
+        # [K, M, B, D] -> [K, M, B]
+        llh = llh.sum(-1)  # sum over independent log gauss prob in x-dimension
+
+        # [K, M, B]
+        return llh.softmax(dim=0)  # softmax over K
+
+    def reconstruction_loss(self, y: Tensor, y_recon: Tensor) -> Tensor:
+        recon_criterion = nn.MSELoss(reduction='sum') if self.cont else nn.BCELoss(reduction='sum')
+
+        return recon_criterion(
+            y_recon,
+            y.unsqueeze(0).expand_as(y_recon)
+        ) / (self.mc * self.batch_size)  # normalize by MC samples and batch size
+
+    def conditional_kl_term(
+            self,
+            mean_x: Tensor,
+            logvar_x: Tensor,
+            means: Tensor,
+            logvars: Tensor,
+            p_z: Tensor
+        ) -> Tensor:
+        var_x = logvar_x.exp()
+        var_k = logvars.exp()
+
+        kl = 0.5 * (
+            logvars - logvar_x.unsqueeze(0)
+            + (var_x.unsqueeze(0) + (mean_x.unsqueeze(0) - means) ** 2) / var_k
+            - 1
+        )  # [K, M, B, D]
+
+        kl = kl.sum(-1)  # [K, M, B]
+        return (p_z * kl).mean(dim=1).sum() / self.batch_size  # avg MC, sum K, normalize by batch size
+
+    def kl_term(self, mean_w: Tensor, logvar_w: Tensor) -> Tensor:
+        return -0.5 * torch.sum(
+            1 + logvar_w - mean_w.pow(2) - logvar_w.exp()
+        ) / self.batch_size  # normalize by batch size
+
+    def z_loss(self, p_z: Tensor) -> Tensor:
+        conditional_entropy = torch.log(p_z + 1e-10) * p_z
+        conditional_entropy = -conditional_entropy.sum() / (self.mc * self.batch_size)
+        # normalize by MC samples and batch size
+
+        # zloss should encourage diversity in cluster assignments
+        # The log(1/w_dim) erm is the entropy of uniform prior, should not scale with B
+        zloss = -conditional_entropy - torch.log(torch.tensor(1.0) / self.w_size)
+        return torch.max(zloss, torch.tensor(self.lambda_threshold))
+
+
+    def acc_evaluation(self, generated_label: Tensor, true_label: Tensor) -> Tensor:
 
         x_n = generated_label.argmax(0)
         labels = generated_label.argmax(1)
@@ -134,97 +174,76 @@ class GMVAE(nn.Module):
         cluster_labels = true_label[x_n]
 
         #  [N x K]
-        #  [K] 
+        #  [K]
 
-        acc = 0
-        for k in range(10):
+        acc = torch.tensor(0)
+        for k in range(self.number_of_mixtures):
             acc += ((labels == k) & (true_label == cluster_labels[k])).sum()
-        
+
         acc = acc/len(generated_label)
 
         return acc
 
-    def get_class_prob(self, y: torch.Tensor):
-        (mean_x, logVar_x), (mean_w, logVar_w) = self.recogniser(y)
 
-        logVar_x = torch.clamp(logVar_x, min=-30.0, max=20.0)
-        logVar_w = torch.clamp(logVar_w, min=-30.0, max=20.0)
+    def get_db_score(self, data_points: Tensor, test_class_probs: Tensor) -> float:
+        labels = test_class_probs.argmax(1)
+        if len(torch.unique(labels)) > 1:
+            return davies_bouldin_score(data_points, labels)
+        return torch.nan
+        #db_score = davies_bouldin_score(cluster_labels, )
 
-        x_dist = Normal(mean_x, torch.exp(0.5 * logVar_x))
-        w_dist = Normal(mean_w, torch.exp(0.5 * logVar_w))
+    def get_adjust_rand(self, true_label: Tensor, test_class_probs: Tensor) -> float:
+        labels = test_class_probs.argmax(1)
+
+        return adjusted_rand_score(true_label, labels)
+
+
+
+    def get_class_prob(self, y: Tensor) -> Tensor:
+        (mean_x, logvar_x), (mean_w, logvar_w) = self.recogniser(y)
+
+        logvar_x = torch.clamp(logvar_x, min=-30.0, max=20.0)
+        logvar_w = torch.clamp(logvar_w, min=-30.0, max=20.0)
+
+        x_dist = Normal(mean_x, torch.exp(0.5 * logvar_x))
+        w_dist = Normal(mean_w, torch.exp(0.5 * logvar_w))
 
         x_sample = x_dist.rsample((1,))
         w_sample = w_dist.rsample((1,))
 
-        _, B, x_size = x_sample.shape # M x B x x_size
-        _, _, w_size = w_sample.shape # M x B x w_size
+        _, batch_size, x_size = x_sample.shape  # M x B x x_size
+        _, _, w_size = w_sample.shape  # M x B x w_size
 
-        x_sample = x_sample.view(B, x_size)
-        w_sample = w_sample.view(B, w_size)
+        x_sample = x_sample.view(batch_size, x_size)
+        w_sample = w_sample.view(batch_size, w_size)
 
         (means, logvars) = self.priorgenerator(w_sample)
 
-        x_sample = x_sample.view(B, x_size)
-        w_sample = w_sample.view(B, w_size)
+        means = torch.stack([mean.view(batch_size, x_size) for mean in means])
+        logvars = torch.stack([logvar.view(batch_size, x_size) for logvar in logvars])
 
-        means = torch.stack([mean.view(B, x_size) for mean in means])
-        logvars = torch.stack([logvar.view(B, x_size) for logvar in logvars])
-
-        # llh
+        # Compute log-likelihood
         dist = Normal(means, torch.exp(0.5 * logvars))
         # x_sample is [B, D], need [K, B, D] to match means
-        x_sample_expanded = x_sample.unsqueeze(0).expand(10, -1, -1)
+        num_mixtures = means.shape[0]
+        x_sample_expanded = x_sample.unsqueeze(0).expand(num_mixtures, -1, -1)
         llh = dist.log_prob(x_sample_expanded)
 
         # [K, B, D] -> [K, B]
-        llh = llh.sum(-1) # sum over independent log gauss prob in x-dimension
-        
-        # [K, M, B]
-        p_z = llh.softmax(dim=0) # softmax over K
-    
+        llh = llh.sum(-1)  # sum over independent log gauss prob in x-dimension
+
+        # [K, B]
+        p_z = llh.softmax(dim=0)  # softmax over K
+
         return p_z
-    
-    
 
-
-if __name__ == "__main__":
-
-
-    input_size = 28*28
-    hidden_size = 16
-    x_size = 8
-    w_size = 4
-    number_of_mixtures=10
-
-    recog = Recogniser(input_size=input_size,
-                       hidden_size=hidden_size,
-                       x_size=x_size,
-                       w_size=w_size,
-                       number_of_mixtures=number_of_mixtures)
-    
-    ygen = YGenerator(input_size=x_size,
-                      hidden_size=hidden_size,
-                      output_size=input_size,
-                      continuous=True)
-    
-    priorgen = PriorGenerator(input_size=w_size,
-                              hidden_size=hidden_size,
-                              output_size=x_size,
-                              number_of_mixtures=number_of_mixtures)
-
-    model = GMVAE(recogniser=recog,
-                  ygenerator=ygen,
-                  priorgenerator=priorgen,
-                  mc=5,
-                  continuous=True)
-
-    train_loader, test_loader = get_mnist_dataloaders(batch_size=256, binarize=False)
-
-    some_iter = iter(train_loader)
-
-    batch = next(some_iter)
-    
-    model.forward(batch[0])
+    def reconstruct(self, y: torch.Tensor) -> torch.Tensor:
+        """Reconstruct input images y using the VAE model."""
+        self.eval()
+        with torch.no_grad():
+            (mean_x, logvar_x), (mean_w, logvar_w) = self.recogniser(y)
+            y_mean = self.ygenerator(mean_x)
+            return y_mean
 
 
 

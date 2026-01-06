@@ -6,7 +6,7 @@ authors = [
 ]
 description = "Special course examining the use of Pantypes and VAEs"
 readme = "README.md"
-requires-python = ">=3.12,<3.13"
+requires-python = ">=3.12"
 dependencies = [
     "ipykernel>=7.0.1",
     "lightning>=2.5.5",

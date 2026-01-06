@@ -23,6 +23,7 @@ class TrainParameters(BaseSettings):
         default="Development",
         description="Name used in naming of experiments",
     )
+    seed: int = 67
 
     # MODEL RELATED PARAMS
     latent_dim: int = Field(
@@ -53,11 +54,13 @@ class TrainParameters(BaseSettings):
 
     # GMM
     y_size: int = 28*28
+    continuous: bool = True
     hidden_size: int = 500
     x_size: int = 200
     w_size: int = 150
     number_of_mixtures: int = 10
     mc: int = 5
+    lambda_threshold: float = 0.5
 
 
 @lru_cache(maxsize=1)
