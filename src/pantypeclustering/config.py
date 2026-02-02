@@ -53,7 +53,7 @@ class TrainParameters(BaseSettings):
     )
 
     # GMM
-    y_size: int = 28*28
+    y_size: int = 28 * 28
     continuous: bool = True
     hidden_size: int = 500
     x_size: int = 200

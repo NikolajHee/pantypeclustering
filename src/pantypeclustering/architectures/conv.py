@@ -1,39 +1,39 @@
 from torch import Tensor, nn
 
 
-class Recogniser(nn.Module):
-    num_channels = 1
-    num_filters = 16
+class Encoder(nn.Module):
+    # Recogniser
+    num_channels = 1  #  MNIST images are grayscale
+    #  Number of filters for the convolutional layers
 
     def __init__(
-            self,
-            input_size: int,
-            hidden_size: int,
-            x_size: int,
-            w_size: int,
-            number_of_mixtures: int,
+        self,
+        hidden_size: int,
+        z1_size: int,
+        z2_size: int,
+        num_filters: int = 16,
     ):
         super().__init__()  # type: ignore
 
         self.main_network = nn.Sequential(
-            nn.Conv2d(self.num_channels, self.num_filters, kernel_size=6, stride=1, padding=0),
-            nn.BatchNorm2d(self.num_filters),
+            nn.Conv2d(self.num_channels, num_filters, kernel_size=6, stride=1, padding=0),
+            nn.BatchNorm2d(num_filters),
             nn.ReLU(),
-            nn.Conv2d(self.num_filters, 2*self.num_filters, kernel_size=6, stride=1, padding=0),
-            nn.BatchNorm2d(2*self.num_filters),
+            nn.Conv2d(num_filters, 2 * num_filters, kernel_size=6, stride=1, padding=0),
+            nn.BatchNorm2d(2 * num_filters),
             nn.ReLU(),
-            nn.Conv2d(2*self.num_filters, 4*self.num_filters, kernel_size=4, stride=2, padding=1),
-            nn.BatchNorm2d(4*self.num_filters),
+            nn.Conv2d(2 * num_filters, 4 * num_filters, kernel_size=4, stride=2, padding=1),
+            nn.BatchNorm2d(4 * num_filters),
             nn.ReLU(),
-            nn.Conv2d(4*self.num_filters, hidden_size, kernel_size=9),
+            nn.Conv2d(4 * num_filters, hidden_size, kernel_size=9),
             nn.BatchNorm2d(hidden_size),
-            nn.ReLU()
+            nn.ReLU(),
         )
 
-        self.mean_x = nn.Linear(hidden_size, x_size)
-        self.logVar_x = nn.Linear(hidden_size, x_size)
-        self.mean_w = nn.Linear(hidden_size, w_size)
-        self.logVar_w = nn.Linear(hidden_size, w_size)
+        self.mean_z1 = nn.Linear(hidden_size, z1_size)
+        self.logVar_z1 = nn.Linear(hidden_size, z1_size)
+        self.mean_z2 = nn.Linear(hidden_size, z2_size)
+        self.logVar_z2 = nn.Linear(hidden_size, z2_size)
 
     def forward(self, x: Tensor) -> tuple[tuple[Tensor, Tensor], tuple[Tensor, Tensor]]:
         batch_size, _, _, _ = x.shape
@@ -42,67 +42,82 @@ class Recogniser(nn.Module):
 
         hidden = hidden.reshape(batch_size, -1)
 
-        mean_x = self.mean_x(hidden)
-        logvar_x = self.logVar_x(hidden)
+        mean_z1 = self.mean_z1(hidden)
+        logvar_z1 = self.logVar_z1(hidden)
 
-        mean_w = self.mean_w(hidden)
-        logvar_w = self.logVar_w(hidden)
+        mean_z2 = self.mean_z2(hidden)
+        logvar_z2 = self.logVar_z2(hidden)
 
-        return (mean_x, logvar_x), (mean_w, logvar_w)
+        return (mean_z1, logvar_z1), (mean_z2, logvar_z2)
 
 
-class YGenerator(nn.Module):
+class Decoder(nn.Module):
+    # XGenerator
     num_channels = 1
-    num_filters = 16
 
-    def __init__(self, input_size: int, hidden_size: int, output_size: int, continuous: bool):
+    def __init__(
+        self,
+        z1_size: int,
+        hidden_size: int,
+        num_filters: int = 16,
+    ):
         super().__init__()  # type: ignore
 
         self.hidden_size = hidden_size
 
         self.projection_layer = nn.Sequential(
-            nn.Linear(input_size, hidden_size),
+            nn.Linear(z1_size, hidden_size),
             nn.BatchNorm1d(hidden_size),
-            nn.ReLU()
+            nn.ReLU(),
         )
         self.main_network = nn.Sequential(
-            nn.ConvTranspose2d(hidden_size, 4*self.num_filters, kernel_size=9),
-            nn.BatchNorm2d(4*self.num_filters),
+            nn.ConvTranspose2d(hidden_size, 4 * num_filters, kernel_size=9),
+            nn.BatchNorm2d(4 * num_filters),
             nn.ReLU(),
-            nn.ConvTranspose2d(4*self.num_filters, 2*self.num_filters, kernel_size=4, stride=2, padding=1),
-            nn.BatchNorm2d(2*self.num_filters),
+            nn.ConvTranspose2d(
+                4 * num_filters,
+                2 * num_filters,
+                kernel_size=4,
+                stride=2,
+                padding=1,
+            ),
+            nn.BatchNorm2d(2 * num_filters),
             nn.ReLU(),
-            nn.ConvTranspose2d(2*self.num_filters, self.num_filters, kernel_size=6, stride=1, padding=0),
-            nn.BatchNorm2d(self.num_filters),
+            nn.ConvTranspose2d(2 * num_filters, num_filters, kernel_size=6, stride=1, padding=0),
+            nn.BatchNorm2d(num_filters),
             nn.ReLU(),
-            nn.ConvTranspose2d(self.num_filters, self.num_channels, kernel_size=6, stride=1, padding=0),
+            nn.ConvTranspose2d(num_filters, self.num_channels, kernel_size=6, stride=1, padding=0),
             nn.BatchNorm2d(self.num_channels),
             nn.Sigmoid(),
         )
 
-    def forward(self, input_tensor: Tensor) -> Tensor:
-        hidden = self.projection_layer(input_tensor)
+    def forward(self, z1: Tensor) -> Tensor:
+        hidden = self.projection_layer(z1)
         hidden = hidden.view(-1, self.hidden_size, 1, 1)
-        y = self.main_network(hidden)
-        return y
+        x = self.main_network(hidden)
+        return x
 
 
 class PriorGenerator(nn.Module):
     def __init__(
-            self, input_size: int, hidden_size: int, output_size: int, number_of_mixtures: int
+        self,
+        z2_size: int,
+        hidden_size: int,
+        z1_size: int,
+        number_of_mixtures: int,
     ):
         super().__init__()  # type: ignore
         self.projection_layer = nn.Sequential(
-            nn.Linear(input_size, hidden_size),
+            nn.Linear(z2_size, hidden_size),
             nn.Tanh(),
         )
 
-        self.mixture_means = nn.ModuleList([
-            nn.Linear(hidden_size, output_size) for _ in range(number_of_mixtures)
-        ])
-        self.mixture_logvars = nn.ModuleList([
-            nn.Linear(hidden_size, output_size) for _ in range(number_of_mixtures)
-        ])
+        self.mixture_means = nn.ModuleList(
+            [nn.Linear(hidden_size, z1_size) for _ in range(number_of_mixtures)],
+        )
+        self.mixture_logvars = nn.ModuleList(
+            [nn.Linear(hidden_size, z1_size) for _ in range(number_of_mixtures)],
+        )
 
     def forward(self, input_tensor: Tensor) -> tuple[list[Tensor], list[Tensor]]:
         hidden = self.projection_layer(input_tensor)

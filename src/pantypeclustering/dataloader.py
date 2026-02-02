@@ -24,6 +24,7 @@ from torchvision import datasets, transforms
 def _binarize(t: torch.Tensor) -> torch.Tensor:
     return (t > 0.5).float()
 
+
 def get_mnist_dataloaders(
     data_dir: str = "./data",
     batch_size: int = 64,
@@ -34,7 +35,6 @@ def get_mnist_dataloaders(
     shuffle_train: bool = True,
     binarize: bool = True,
 ) -> Tuple[DataLoader[Tensor], DataLoader[Tensor]]:
-
     if seed is not None:
         torch.manual_seed(seed)
 
@@ -49,11 +49,17 @@ def get_mnist_dataloaders(
     common_transforms = transforms.Compose(transform_list)
 
     train_dataset = datasets.MNIST(
-        root=data_dir, train=True, transform=common_transforms, download=download
+        root=data_dir,
+        train=True,
+        transform=common_transforms,
+        download=download,
     )
 
     test_dataset = datasets.MNIST(
-        root=data_dir, train=False, transform=common_transforms, download=download
+        root=data_dir,
+        train=False,
+        transform=common_transforms,
+        download=download,
     )
 
     train_loader = DataLoader(
@@ -82,10 +88,18 @@ if __name__ == "__main__":
     parser.add_argument("--data-dir", default="./data", help="Directory to store MNIST data")
     parser.add_argument("--batch-size", type=int, default=64, help="Batch size for loaders")
     parser.add_argument("--num-workers", type=int, default=4, help="Number of worker processes")
-    parser.add_argument("--no-pin-memory", dest="pin_memory", action="store_false",
-                        help="Disable pin_memory (useful on CPU-only machines)")
-    parser.add_argument("--no-download", dest="download", action="store_false",
-                        help="Don't download the dataset")
+    parser.add_argument(
+        "--no-pin-memory",
+        dest="pin_memory",
+        action="store_false",
+        help="Disable pin_memory (useful on CPU-only machines)",
+    )
+    parser.add_argument(
+        "--no-download",
+        dest="download",
+        action="store_false",
+        help="Don't download the dataset",
+    )
     parser.add_argument("--seed", type=int, default=None, help="Optional random seed")
 
     args = parser.parse_args()
