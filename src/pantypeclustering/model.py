@@ -162,7 +162,7 @@ class GMVAE(nn.Module):
 
         # zloss should encourage diversity in cluster assignments
         # The log(1/w_dim) erm is the entropy of uniform prior, should not scale with B
-        zloss = -conditional_entropy - torch.log(torch.tensor(1.0) / self.w_size)
+        zloss = -conditional_entropy - torch.log(torch.tensor(1.0) / self.number_of_mixtures)
         return torch.max(zloss, torch.tensor(self.lambda_threshold))
 
 
