@@ -1,18 +1,29 @@
+from pathlib import Path
+
 import matplotlib.pyplot as plt
 import torch
+from loguru import logger
 from tqdm import tqdm
 
 from pantypeclustering.config import get_training_parameters
 from pantypeclustering.dataloader import get_mnist_dataloaders
-from pantypeclustering.model import GMVAE
+from pantypeclustering.models.model_old import GMVAE
 
 
-def main() -> None:
+def main(seed: None | int = None) -> None:
     """Train the VAE model on MNIST dataset."""
 
     cfg = get_training_parameters()
+    seed = seed if seed is not None else cfg.seed
+    if seed is not None:
+        logger.info(f"Using provided seed: {seed}")
+        torch.manual_seed(seed)
+    else:
+        seed = torch.seed()
+        logger.info(f"No seed provided, using generated seed: {seed}")
 
-    torch.manual_seed(cfg.seed)
+    result_path = Path(cfg.results_dir) / cfg.version / str(seed)
+    result_path.mkdir(parents=True, exist_ok=True)
 
     device = torch.device(
         "cuda"
@@ -23,9 +34,9 @@ def main() -> None:
     )
 
     model = GMVAE(
-        x_size=cfg.y_size,
-        z1_size=cfg.x_size,
-        z2_size=cfg.w_size,
+        x_size=cfg.x_size,
+        z1_size=cfg.z1_size,
+        z2_size=cfg.z2_size,
         hidden_size=cfg.hidden_size,
         number_of_mixtures=cfg.number_of_mixtures,
         mc=cfg.mc,
@@ -61,40 +72,40 @@ def main() -> None:
             disable=disable_tqdm,
         ):
             optimizer.zero_grad()
-            loss, (y, y_recon) = model(images.to(device))
+            loss, x_recon = model(images.to(device))
             loss.backward()
             optimizer.step()
             train_loss[i] = loss.item()
 
         loss_train_save[epoch] = train_loss.mean()
-        print(f"Epoch [{epoch+1}/{cfg.max_epochs}], Train Loss: {train_loss.mean():.4f}")
+        logger.info(f"Epoch [{epoch+1}/{cfg.max_epochs}], Train Loss: {train_loss.mean():.4f}")
 
         model.eval()
 
         test_class_probs = torch.zeros((len(test_loader.dataset), cfg.number_of_mixtures))
         test_label = torch.zeros((len(test_loader.dataset)))
-        test_x = torch.zeros((len(test_loader.dataset), cfg.x_size))
+        test_x = torch.zeros((len(test_loader.dataset), cfg.z1_size))
 
         with torch.no_grad():
             for i, (images, label) in enumerate(test_loader):
-                loss, (y, y_recon) = model(images.to(device))
+                loss, x_recon = model(images.to(device))
                 test_loss[i] = loss.item()
 
                 start_idx = i * cfg.batch_size
                 end_idx = start_idx + len(label)
                 test_class_probs[start_idx:end_idx] = model.get_class_prob(images.to(device)).T
                 test_label[start_idx:end_idx] = label
-                (mean_z1, _), (_, _) = model.encoder(images.to(device))
+                (mean_z1, _), (_, _) = model.recogniser(images.to(device))
 
                 test_x[start_idx:end_idx] = mean_z1
 
                 # Save sample images from first batch of each epoch
                 if i == 0:
-                    for j in range(min(10, len(y))):
+                    for j in range(min(10, len(images))):
                         _, axs = plt.subplots(1, 2)
-                        axs[0].imshow(y[j].squeeze().detach().cpu().numpy(), cmap="gray")
-                        axs[1].imshow(y_recon[0][j].squeeze().detach().cpu().numpy(), cmap="gray")
-                        plt.savefig(f"img_sample{j}.png")
+                        axs[0].imshow(images[j].squeeze().detach().cpu().numpy(), cmap="gray")
+                        axs[1].imshow(x_recon[0][j].squeeze().detach().cpu().numpy(), cmap="gray")
+                        plt.savefig(result_path / f"img_sample{j}.png")
                         plt.close()
 
             acc = model.acc_evaluation(test_class_probs, test_label)
@@ -107,21 +118,22 @@ def main() -> None:
 
         loss_test_save[epoch] = test_loss.mean()
 
-        print(
-            f"Epoch [{epoch+1}/{cfg.max_epochs}], ",
-            f"Test Loss: {test_loss.mean():.4f}, ",
-            f"ACC: {acc:.4f}, DB: {db_score:.4f}, ",
-            f"ADJ: {adj_rand_score}",
+        logger.info(
+            f"Epoch [{epoch+1}/{cfg.max_epochs}], "
+            + f"Test Loss: {test_loss.mean():.4f}, "
+            + f"ACC: {acc:.4f}, DB: {db_score:.4f}, "
+            + f"ADJ: {adj_rand_score}",
         )
 
     # Save model and results
-    # torch.save(model.state_dict(), "gmvae_mnist.pth")
+    torch.save(model.state_dict(), result_path / "gmvae_mnist.pth")
     # torch.save(loss_train_save, "avg_train.npy")
     # torch.save(loss_test_save, "avg_test.npy")
-    torch.save(accuracy, "accuracy.npy")
-    torch.save(db_scores, "db_scores.npy")
-    torch.save(adj_rand_scores, "adj_rand_scores.npy")
+    torch.save(accuracy, result_path / "accuracy.npy")
+    torch.save(db_scores, result_path / "db_scores.npy")
+    torch.save(adj_rand_scores, result_path / "adj_rand_scores.npy")
 
 
 if __name__ == "__main__":
-    main()
+    for i in range(1):
+        main()

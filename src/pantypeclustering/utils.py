@@ -1,5 +1,19 @@
 import argparse
+from dataclasses import dataclass
 
+from torch import Tensor
+
+
+@dataclass
+class ForwardOutput:
+    mean_z1: Tensor
+    logvar_z1: Tensor
+    z1: Tensor
+    mean_z2: Tensor
+    logvar_z2: Tensor
+    x_recon: Tensor
+    prior_means: Tensor
+    prior_logvars: Tensor
 
 def get_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Training options")
