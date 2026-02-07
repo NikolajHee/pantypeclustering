@@ -1,17 +1,18 @@
+"""Convolutional encoder, decoder, and GMM prior for GMVAE."""
 from torch import Tensor, nn
 
 
-class Recogniser(nn.Module):
+class Encoder(nn.Module):
+    """CNN encoder mapping images to (z1, z2) latent parameters."""
+
     num_channels = 1
     num_filters = 16
 
     def __init__(
             self,
-            input_size: int,
             hidden_size: int,
             x_size: int,
             w_size: int,
-            number_of_mixtures: int,
     ):
         super().__init__()  # type: ignore
 
@@ -51,11 +52,13 @@ class Recogniser(nn.Module):
         return (mean_x, logvar_x), (mean_w, logvar_w)
 
 
-class YGenerator(nn.Module):
+class Decoder(nn.Module):
+    """Transposed CNN decoder mapping latent z1 to images."""
+
     num_channels = 1
     num_filters = 16
 
-    def __init__(self, input_size: int, hidden_size: int, output_size: int, continuous: bool):
+    def __init__(self, input_size: int, hidden_size: int):
         super().__init__()  # type: ignore
 
         self.hidden_size = hidden_size
@@ -88,6 +91,8 @@ class YGenerator(nn.Module):
 
 
 class PriorGenerator(nn.Module):
+    """Gaussian mixture prior p(z1|z2) with K components."""
+
     def __init__(
             self, input_size: int, hidden_size: int, output_size: int, number_of_mixtures: int
     ):

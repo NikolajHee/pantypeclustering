@@ -1,3 +1,4 @@
+"""GMVAE training entrypoint for MNIST clustering."""
 import matplotlib.pyplot as plt
 import torch
 from tqdm import tqdm
@@ -8,13 +9,9 @@ from pantypeclustering.model import GMVAE
 
 
 def main() -> None:
-    """ Train the VAE model on MNIST dataset. """
-
-
+    """Train the VAE model on MNIST dataset."""
     cfg = get_training_parameters()
-
     torch.manual_seed(cfg.seed)
-
 
     device = torch.device(
         "cuda" if torch.cuda.is_available()
@@ -23,9 +20,9 @@ def main() -> None:
     )
 
     model = GMVAE(
-        y_size=cfg.y_size,
         x_size=cfg.x_size,
-        w_size=cfg.w_size,
+        z1_size=cfg.z1_size,
+        z2_size=cfg.z2_size,
         hidden_size=cfg.hidden_size,
         number_of_mixtures=cfg.number_of_mixtures,
         mc=cfg.mc,
@@ -42,9 +39,6 @@ def main() -> None:
     )
     optimizer = torch.optim.Adam(model.parameters(), lr=cfg.learning_rate)
 
-
-    loss_train_save = torch.zeros(cfg.max_epochs)
-    loss_test_save = torch.zeros(cfg.max_epochs)
     accuracy = torch.zeros(cfg.max_epochs)
     db_scores = torch.zeros(cfg.max_epochs)
     adj_rand_scores = torch.zeros(cfg.max_epochs)
@@ -63,14 +57,13 @@ def main() -> None:
             optimizer.step()
             train_loss[i] = loss.item()
 
-        loss_train_save[epoch] = train_loss.mean()
         print(f"Epoch [{epoch+1}/{cfg.max_epochs}], Train Loss: {train_loss.mean():.4f}")
 
         model.eval()
 
         test_class_probs = torch.zeros((len(test_loader.dataset), cfg.number_of_mixtures))
         test_label = torch.zeros((len(test_loader.dataset)))
-        test_x = torch.zeros((len(test_loader.dataset), cfg.x_size))
+        test_x = torch.zeros((len(test_loader.dataset), cfg.z1_size))
 
         with torch.no_grad():
             for i, (images, label) in enumerate(test_loader):
@@ -81,7 +74,7 @@ def main() -> None:
                 end_idx = start_idx + len(label)
                 test_class_probs[start_idx:end_idx] = model.get_class_prob(images.to(device)).T
                 test_label[start_idx:end_idx] = label
-                (mean_x, logvar_x), (mean_w, logvar_w) = model.recogniser(images.to(device))
+                (mean_x, _), (_, _) = model.encoder(images.to(device))
 
                 test_x[start_idx:end_idx] = mean_x
 
@@ -102,18 +95,12 @@ def main() -> None:
         db_scores[epoch] = db_score
         adj_rand_scores[epoch] = adj_rand_score
 
-        loss_test_save[epoch] = test_loss.mean()
+        print(f"Epoch [{epoch+1}/{cfg.max_epochs}], Test Loss: {test_loss.mean():.4f}, ACC: {acc:.4f}, DB: {db_score:.4f}, ADJ_RAND: {adj_rand_score}")
 
-        print(f"Epoch [{epoch+1}/{cfg.max_epochs}], Test Loss: {test_loss.mean():.4f}, ACC: {acc:.4f}, DB: {db_score:.4f}, ADJ; {adj_rand_score}")
-
-    # Save model and results
-    #torch.save(model.state_dict(), "gmvae_mnist.pth")
-    #torch.save(loss_train_save, "avg_train.npy")
-    #torch.save(loss_test_save, "avg_test.npy")
-    torch.save(accuracy, f"accuracy.npy")
-    torch.save(db_scores, f"db_scores.npy")
-    torch.save(adj_rand_scores, f"adj_rand_scores.npy")
-
+    # Save results
+    torch.save(accuracy, "accuracy.npy")
+    torch.save(db_scores, "db_scores.npy")
+    torch.save(adj_rand_scores, "adj_rand_scores.npy")
 
 
 if __name__ == "__main__":

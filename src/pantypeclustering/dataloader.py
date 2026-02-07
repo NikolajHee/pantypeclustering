@@ -22,7 +22,9 @@ from torchvision import datasets, transforms
 
 
 def _binarize(t: torch.Tensor) -> torch.Tensor:
+    """Threshold pixels to 0/1."""
     return (t > 0.5).float()
+
 
 def get_mnist_dataloaders(
     data_dir: str = "./data",
@@ -34,7 +36,7 @@ def get_mnist_dataloaders(
     shuffle_train: bool = True,
     binarize: bool = True,
 ) -> Tuple[DataLoader[Tensor], DataLoader[Tensor]]:
-
+    """Return train and test DataLoaders for MNIST."""
     if seed is not None:
         torch.manual_seed(seed)
 
