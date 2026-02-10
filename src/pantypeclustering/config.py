@@ -16,7 +16,7 @@ class TrainParameters(BaseSettings):
     learning_rate: float = 1e-4
 
     num_workers: int = Field(
-        default=9,
+        default=4,
         description="Number of workers in dataloader.",
     )
 

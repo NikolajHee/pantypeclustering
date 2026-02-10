@@ -3,14 +3,17 @@ from sklearn.metrics import adjusted_rand_score, davies_bouldin_score
 from torch import Tensor, nn
 from torch.distributions import Normal, Categorical
 
+import pytorch_lightning as pl
+
 from pantypeclustering.architectures.conv import Decoder, Encoder, PriorGenerator
 
 NUMBER_OF_CLASSES = 10
-class GMVAE(nn.Module):
+class GMVAE(pl.LightningModule):
     """Gaussian Mixture VAE for unsupervised clustering of images."""
 
     def __init__(
             self,
+            learning_rate: float,
             x_size: int,
             z1_size: int,
             z2_size: int,
@@ -19,6 +22,8 @@ class GMVAE(nn.Module):
             mc: int,
             continuous: bool,
             lambda_threshold: float,
+            N: int,
+            seed: int,
     ):
         super().__init__()  # type: ignore
 
@@ -40,12 +45,17 @@ class GMVAE(nn.Module):
             number_of_mixtures=number_of_mixtures
         )
 
+        self.learning_rate = learning_rate
         self.mc = mc
         self.cont = continuous
         self.lambda_threshold = lambda_threshold
         self.z1_size, self.x_size, self.z2_size = z1_size, x_size, z2_size
         self.hidden_size = hidden_size
         self.number_of_mixtures = number_of_mixtures
+        self.N = N
+
+        self.acc: list[float] = []
+        self.seed = seed
 
         self.prior_logits = nn.Parameter(torch.zeros(number_of_mixtures))
 
@@ -102,6 +112,48 @@ class GMVAE(nn.Module):
         total_loss = recon_loss + exp_kl + vae_kld_loss + yloss
 
         return total_loss, (x, x_recon)
+
+    def training_step(self, batch: tuple[Tensor, Tensor], batch_id: int) -> Tensor:
+        images, _ = batch
+        loss, _ = self.forward(images)
+        self.log('train_loss', loss)
+        return loss
+
+    def validation_step(self, batch: tuple[Tensor, Tensor], batch_idx: int) -> None:
+        images, label = batch
+        loss, _ = self.forward(images)
+        self.log('val_loss', loss)
+
+        # Save test data for evaluation
+        start_idx = batch_idx * len(label)
+        end_idx = start_idx + len(label)
+        self.test_class_probs[start_idx:end_idx] = self.get_class_prob(images).T
+        self.test_label[start_idx:end_idx] = label
+        (mean_z1, _), (_, _) = self.encoder(images)
+        self.test_z1[start_idx:end_idx] = mean_z1
+
+    def on_validation_epoch_start(self) -> None:
+        self.reset_test_saves()
+
+    def on_validation_epoch_end(self) -> None:
+        """Evaluate clustering metrics at the end of validation epoch."""
+
+        acc = self.acc_evaluation(self.test_class_probs, self.test_label)
+        db_score = self.get_db_score(self.test_z1, self.test_class_probs)
+        adj_rand = self.get_adjust_rand(self.test_label, self.test_class_probs)
+
+        self.acc.append(acc.item())
+
+        self.log('val_acc', acc, prog_bar=True)
+        self.log('val_db', db_score)
+        self.log('val_adj_rand', adj_rand)
+
+    def on_fit_end(self) -> None:
+        pass
+        #torch.save(self.acc, f'acc_history_alternative_{self.seed}.pt')
+
+    def configure_optimizers(self) -> torch.optim.Optimizer:
+        return torch.optim.Adam(self.parameters(), lr=(self.learning_rate))
 
     def gaussian_mixture(self, z1_sample: Tensor, means: Tensor, logvars: Tensor) -> Tensor:
         """Compute mixture component posterior p(y|z1, z2)."""
@@ -188,6 +240,12 @@ class GMVAE(nn.Module):
         """Wrapper for clustering loss with option for free bits."""
         yloss = self._y_loss_alternative(p_y)
         return torch.max(yloss, torch.tensor(self.lambda_threshold))
+
+    def reset_test_saves(self) -> None:
+        """Reset saved test data for evaluation."""
+        self.test_class_probs = torch.zeros((self.N, self.number_of_mixtures))
+        self.test_label = torch.zeros((self.N))
+        self.test_z1 = torch.zeros((self.N, self.z1_size))
 
     def acc_evaluation(self, generated_label: Tensor, true_label: Tensor) -> Tensor:
         """Clustering accuracy via best label permutation."""
