@@ -26,6 +26,8 @@ class TrainParameters(BaseSettings):
     hidden_size: int = 500
     z1_size: int = 200
     z2_size: int = 150
+    z1_size: int = 200
+    z2_size: int = 150
     number_of_mixtures: int = 10
     mc: int = 5
     lambda_threshold: float = 0.5

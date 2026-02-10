@@ -1,11 +1,12 @@
 """GMVAE training entrypoint for MNIST clustering."""
 import matplotlib.pyplot as plt
 import torch
+from loguru import logger
 from tqdm import tqdm
 
 from pantypeclustering.config import get_training_parameters
 from pantypeclustering.dataloader import get_mnist_dataloaders
-from pantypeclustering.model import GMVAE
+from pantypeclustering.models.model_old import GMVAE
 
 
 def main(seed: int | None = None) -> None:
@@ -17,13 +18,17 @@ def main(seed: int | None = None) -> None:
         torch.manual_seed(cfg.seed)
 
     device = torch.device(
-        "cuda" if torch.cuda.is_available()
-        else "mps" if hasattr(torch.backends, "mps") and torch.backends.mps.is_available()
-        else "cpu"
+        "cuda"
+        if torch.cuda.is_available()
+        else "mps"
+        if torch.backends.mps.is_available()
+        else "cpu",
     )
 
     model = GMVAE(
         x_size=cfg.x_size,
+        z1_size=cfg.z1_size,
+        z2_size=cfg.z2_size,
         z1_size=cfg.z1_size,
         z2_size=cfg.z2_size,
         hidden_size=cfg.hidden_size,
@@ -53,7 +58,11 @@ def main(seed: int | None = None) -> None:
         train_loss = torch.zeros(len(train_loader))
         test_loss = torch.zeros(len(test_loader))
 
-        for i, (images, _) in tqdm(enumerate(train_loader), total=len(train_loader), disable=disable_tqdm):
+        for i, (images, _) in tqdm(
+            enumerate(train_loader),
+            total=len(train_loader),
+            disable=disable_tqdm,
+        ):
             optimizer.zero_grad()
             loss, (x, x_recon) = model(images.to(device))
             loss.backward()

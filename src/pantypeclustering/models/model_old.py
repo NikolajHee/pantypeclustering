@@ -1,7 +1,19 @@
 import torch
 from sklearn.metrics import adjusted_rand_score, davies_bouldin_score
 from torch import Tensor, nn
+<<<<<<< HEAD:src/pantypeclustering/model.py
 from torch.distributions import Normal, Categorical
+=======
+from torch.distributions import Normal
+
+from pantypeclustering.architectures.conv import PriorGenerator, Encoder, Decoder
+
+from sklearn.metrics import (
+    davies_bouldin_score,
+    silhouette_score,  # pyright: ignore[reportUnknownVariableType]
+    adjusted_rand_score,
+)
+>>>>>>> master:src/pantypeclustering/models/model_old.py
 
 from pantypeclustering.architectures.conv import Decoder, Encoder, PriorGenerator
 
@@ -22,6 +34,7 @@ class GMVAE(nn.Module):
     ):
         super().__init__()  # type: ignore
 
+<<<<<<< HEAD:src/pantypeclustering/model.py
         self.encoder = Encoder(
             hidden_size=hidden_size,
             x_size=z1_size,
@@ -30,20 +43,40 @@ class GMVAE(nn.Module):
 
         self.decoder = Decoder(
             input_size=z1_size,
+=======
+        self.recogniser = Encoder(
+            hidden_size=hidden_size,
+            z1_size=z1_size,
+            z2_size=z2_size,
+        )
+
+        self.ygenerator = Decoder(
+            z1_size=z1_size,
+>>>>>>> master:src/pantypeclustering/models/model_old.py
             hidden_size=hidden_size,
         )
 
         self.priorgenerator = PriorGenerator(
+<<<<<<< HEAD:src/pantypeclustering/model.py
             input_size=z2_size,
             hidden_size=hidden_size,
             output_size=z1_size,
+=======
+            z2_size=z2_size,
+            hidden_size=hidden_size,
+            z1_size=z1_size,
+>>>>>>> master:src/pantypeclustering/models/model_old.py
             number_of_mixtures=number_of_mixtures
         )
 
         self.mc = mc
         self.cont = continuous
         self.lambda_threshold = lambda_threshold
+<<<<<<< HEAD:src/pantypeclustering/model.py
         self.z1_size, self.x_size, self.z2_size = z1_size, x_size, z2_size
+=======
+        self.x_size, self.y_size, self.w_size = z1_size, x_size, z2_size
+>>>>>>> master:src/pantypeclustering/models/model_old.py
         self.hidden_size = hidden_size
         self.number_of_mixtures = number_of_mixtures
 
