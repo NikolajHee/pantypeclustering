@@ -1,9 +1,8 @@
+import pytorch_lightning as pl
 import torch
 from sklearn.metrics import adjusted_rand_score, davies_bouldin_score
 from torch import Tensor, nn
-from torch.distributions import Normal, Categorical
-
-import pytorch_lightning as pl
+from torch.distributions import Normal
 
 from pantypeclustering.architectures.conv import Decoder, Encoder, PriorGenerator
 
@@ -29,19 +28,19 @@ class GMVAE(pl.LightningModule):
 
         self.encoder = Encoder(
             hidden_size=hidden_size,
-            x_size=z1_size,
-            w_size=z2_size,
+            z1_size=z1_size,
+            z2_size=z2_size,
         )
 
         self.decoder = Decoder(
-            input_size=z1_size,
+            z1_size=z1_size,
             hidden_size=hidden_size,
         )
 
         self.priorgenerator = PriorGenerator(
-            input_size=z2_size,
+            z2_size=z2_size,
             hidden_size=hidden_size,
-            output_size=z1_size,
+            z1_size=z1_size,
             number_of_mixtures=number_of_mixtures
         )
 

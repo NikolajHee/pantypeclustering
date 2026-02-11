@@ -3,18 +3,7 @@ from torch import Tensor, nn
 
 
 class Encoder(nn.Module):
-<<<<<<< HEAD
     """CNN encoder mapping images to (z1, z2) latent parameters."""
-
-    num_channels = 1
-    num_filters = 16
-
-    def __init__(
-            self,
-            hidden_size: int,
-            x_size: int,
-            w_size: int,
-=======
     # Recogniser
     num_channels = 1  #  MNIST images are grayscale
     #  Number of filters for the convolutional layers
@@ -25,7 +14,6 @@ class Encoder(nn.Module):
         z1_size: int,
         z2_size: int,
         num_filters: int = 16,
->>>>>>> master
     ):
         super().__init__()  # type: ignore
 
@@ -66,24 +54,16 @@ class Encoder(nn.Module):
 
 
 class Decoder(nn.Module):
-<<<<<<< HEAD
     """Transposed CNN decoder mapping latent z1 to images."""
 
-=======
-    # XGenerator
->>>>>>> master
     num_channels = 1
 
-<<<<<<< HEAD
-    def __init__(self, input_size: int, hidden_size: int):
-=======
     def __init__(
         self,
         z1_size: int,
         hidden_size: int,
         num_filters: int = 16,
     ):
->>>>>>> master
         super().__init__()  # type: ignore
 
         self.hidden_size = hidden_size
