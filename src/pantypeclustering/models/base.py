@@ -1,5 +1,5 @@
 import math
-from typing import Any, Mapping, Union
+from typing import Any
 
 import matplotlib.pyplot as plt
 import torch
@@ -96,7 +96,7 @@ class CNNDecoder(nn.Module):
         )
 
         # lineært lag
-        self.final_layer = nn.Linear(28*28*1, 28*28*1*2)
+        self.final_layer = nn.Linear(28 * 28 * 1, 28 * 28 * 1 * 2)
 
     def forward(self, z: Tensor) -> tuple[Tensor, Tensor]:
         x = self.to_decoder(z)
@@ -117,10 +117,6 @@ class CNNDecoder(nn.Module):
         return (mean, log_var)
 
 
-
-
-
-
 class ModelVAEKingma(nn.Module):
     def __init__(
         self,
@@ -134,7 +130,7 @@ class ModelVAEKingma(nn.Module):
         self.encoder = CNNEncoder(latent_features)
         self.decoder = CNNDecoder(latent_features)
 
-        self.prior =  ReparameterizedDiagonalGaussian(
+        self.prior = ReparameterizedDiagonalGaussian(
             mu=torch.zeros(latent_features).to("mps:0"),
             log_sigma=torch.zeros(latent_features).to("mps:0"),
         )
@@ -260,8 +256,6 @@ class VariationalAutoencoderKingma(nn.Module):
         optimizer = torch.optim.Adam(self.model.parameters(), lr=self.learning_rate)
 
         return optimizer
-
-
 
     def on_validation_epoch_end(self) -> None:
         if len(self.val_latents) > 30:

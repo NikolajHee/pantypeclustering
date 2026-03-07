@@ -1,4 +1,5 @@
 """Training configuration loaded from env / dotenv."""
+
 from functools import lru_cache
 
 from pydantic import Field
@@ -16,16 +17,14 @@ class TrainParameters(BaseSettings):
     learning_rate: float = 1e-4
 
     num_workers: int = Field(
-        default=4,
+        default=3,
         description="Number of workers in dataloader.",
     )
 
     # GMM
-    x_size: int = 28*28
+    x_size: int = 28 * 28
     continuous: bool = True
     hidden_size: int = 500
-    z1_size: int = 200
-    z2_size: int = 150
     z1_size: int = 200
     z2_size: int = 150
     number_of_mixtures: int = 10

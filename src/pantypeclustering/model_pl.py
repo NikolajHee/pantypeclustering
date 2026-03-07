@@ -6,23 +6,28 @@ from torch.distributions import Normal
 
 from pantypeclustering.architectures.conv import Decoder, Encoder, PriorGenerator
 
+# import pdb
+
 NUMBER_OF_CLASSES = 10
+
+
 class GMVAE(pl.LightningModule):
     """Gaussian Mixture VAE for unsupervised clustering of images."""
 
     def __init__(
-            self,
-            learning_rate: float,
-            x_size: int,
-            z1_size: int,
-            z2_size: int,
-            hidden_size: int,
-            number_of_mixtures: int,
-            mc: int,
-            continuous: bool,
-            lambda_threshold: float,
-            N: int,
-            seed: int,
+        self,
+        learning_rate: float,
+        x_size: int,
+        z1_size: int,
+        z2_size: int,
+        hidden_size: int,
+        number_of_mixtures: int,
+        mc: int,
+        continuous: bool,
+        lambda_threshold: float,
+        N: int,
+        seed: int,
+        alpha: float,
     ):
         super().__init__()  # type: ignore
 
@@ -41,7 +46,7 @@ class GMVAE(pl.LightningModule):
             z2_size=z2_size,
             hidden_size=hidden_size,
             z1_size=z1_size,
-            number_of_mixtures=number_of_mixtures
+            number_of_mixtures=number_of_mixtures,
         )
 
         self.learning_rate = learning_rate
@@ -57,6 +62,8 @@ class GMVAE(pl.LightningModule):
         self.seed = seed
 
         self.prior_logits = nn.Parameter(torch.zeros(number_of_mixtures))
+
+        self.alpha = alpha
 
     def forward(self, x: Tensor) -> Tensor:
         """Compute ELBO loss and return (original, reconstructed) images."""
@@ -85,7 +92,9 @@ class GMVAE(pl.LightningModule):
         z2_sample = z2_sample.view(self.mc, self.batch_size, self.z2_size)
 
         means = torch.stack([mean.view(self.mc, self.batch_size, self.z1_size) for mean in means])
-        logvars = torch.stack([logvar.view(self.mc, self.batch_size, self.z1_size) for logvar in logvars])
+        logvars = torch.stack(
+            [logvar.view(self.mc, self.batch_size, self.z1_size) for logvar in logvars]
+        )
 
         # Compute log-likelihood
         p_y = self.gaussian_mixture(z1_sample, means, logvars)
@@ -99,7 +108,7 @@ class GMVAE(pl.LightningModule):
             logvar_z1=logvar_z1,
             means=means,
             logvars=logvars,
-            p_y=p_y
+            p_y=p_y,
         )
 
         # 3.) KL( q(w) || P(w) )
@@ -108,20 +117,53 @@ class GMVAE(pl.LightningModule):
         # 4.) CV = H(Z|X, W) = E_q(x,w) [ E_p(z|x,w)[ - log P(z|x,w)] ]
         yloss = self.y_loss(p_y)
 
-        total_loss = recon_loss + exp_kl + vae_kld_loss + yloss
+        # 5) adding a new volume term to encourage cluster separation (not in original paper)
+        volume_term = self.volume_term(means, logvars)
+
+        self.log("recon_loss", recon_loss)
+        self.log("exp_kl", exp_kl)
+        self.log("vae_kld_loss", vae_kld_loss)
+        self.log("yloss", yloss)
+        self.log("volume_term", volume_term)
+
+        total_loss = recon_loss + exp_kl + vae_kld_loss + yloss + self.alpha * volume_term
 
         return total_loss, (x, x_recon)
+
+    def volume_term(self, means: Tensor, logvars: Tensor) -> Tensor:
+        """Encourage cluster separation via volume term."""
+        K, M, B, D = means.shape
+
+        x_perm = means.permute(1, 2, 0, 3)  # [M, B, K, D]
+
+        G = torch.matmul(x_perm, x_perm.mT)
+
+        det = torch.linalg.det(G)
+
+        # eps = 1e-6
+        # I = torch.eye(K, device=G.device)
+        # G = G + eps * I
+
+        # L = torch.linalg.cholesky(G)
+        # logdet = 2 * torch.log(torch.diagonal(L, dim1=-2, dim2=-1)).sum(-1)
+        # det = torch.exp(0.5 * logdet)
+
+        # det = torch.sqrt(torch.linalg.det(G))  # log determinant for numerical stability
+
+        vol_avg = det.sum() / (M * B)
+
+        return 1 / vol_avg  # , torch.tensor(10.0))  # average over MC samples and batch size
 
     def training_step(self, batch: tuple[Tensor, Tensor], batch_id: int) -> Tensor:
         images, _ = batch
         loss, _ = self.forward(images)
-        self.log('train_loss', loss)
+        self.log("train_loss", loss)
         return loss
 
     def validation_step(self, batch: tuple[Tensor, Tensor], batch_idx: int) -> None:
         images, label = batch
         loss, _ = self.forward(images)
-        self.log('val_loss', loss)
+        self.log("val_loss", loss)
 
         # Save test data for evaluation
         start_idx = batch_idx * len(label)
@@ -143,13 +185,13 @@ class GMVAE(pl.LightningModule):
 
         self.acc.append(acc.item())
 
-        self.log('val_acc', acc, prog_bar=True)
-        self.log('val_db', db_score)
-        self.log('val_adj_rand', adj_rand)
+        self.log("val_acc", acc, prog_bar=True)
+        self.log("val_db", db_score)
+        self.log("val_adj_rand", adj_rand)
 
     def on_fit_end(self) -> None:
         pass
-        #torch.save(self.acc, f'acc_history_alternative_{self.seed}.pt')
+        # torch.save(self.acc, f'acc_history_alternative_{self.seed}.pt')
 
     def configure_optimizers(self) -> torch.optim.Optimizer:
         return torch.optim.Adam(self.parameters(), lr=(self.learning_rate))
@@ -171,39 +213,46 @@ class GMVAE(pl.LightningModule):
 
     def reconstruction_loss(self, x: Tensor, x_recon: Tensor) -> Tensor:
         """MSE or BCE loss for reconstruction."""
-        recon_criterion = nn.MSELoss(reduction='sum') if self.cont else nn.BCELoss(reduction='sum')
+        recon_criterion = nn.MSELoss(reduction="sum") if self.cont else nn.BCELoss(reduction="sum")
 
         return recon_criterion(
             x_recon,
-            x.unsqueeze(0).expand_as(x_recon)
+            x.unsqueeze(0).expand_as(x_recon),
         ) / (self.mc * self.batch_size)  # normalize by MC samples and batch size
 
     def conditional_kl_term(
-            self,
-            mean_z1: Tensor,
-            logvar_z1: Tensor,
-            means: Tensor,
-            logvars: Tensor,
-            p_y: Tensor,
+        self,
+        mean_z1: Tensor,
+        logvar_z1: Tensor,
+        means: Tensor,
+        logvars: Tensor,
+        p_y: Tensor,
     ) -> Tensor:
         """Conditional KL E[KL(q(z1|x)||p(z1|z2))]."""
         var_z1 = logvar_z1.exp()
         var_k = logvars.exp()
 
         kl = 0.5 * (
-            logvars - logvar_z1.unsqueeze(0)
+            logvars
+            - logvar_z1.unsqueeze(0)
             + (var_z1.unsqueeze(0) + (mean_z1.unsqueeze(0) - means) ** 2) / var_k
             - 1
         )  # [K, M, B, D]
 
         kl = kl.sum(-1)  # [K, M, B]
-        return (p_y * kl).mean(dim=1).sum() / self.batch_size  # avg MC, sum K, normalize by batch size
+        return (p_y * kl).mean(
+            dim=1
+        ).sum() / self.batch_size  # avg MC, sum K, normalize by batch size
 
     def kl_term(self, mean_z2: Tensor, logvar_z2: Tensor) -> Tensor:
         """KL divergence from encoder posterior to standard normal prior."""
-        return -0.5 * torch.sum(
-            1 + logvar_z2 - mean_z2.pow(2) - logvar_z2.exp()
-        ) / self.batch_size  # normalize by batch size
+        return (
+            -0.5
+            * torch.sum(
+                1 + logvar_z2 - mean_z2.pow(2) - logvar_z2.exp(),
+            )
+            / self.batch_size
+        )  # normalize by batch size
 
     def _y_loss(self, p_y: Tensor) -> Tensor:
         """Information-theoretic clustering loss (min entropy, free bits)."""
@@ -226,12 +275,12 @@ class GMVAE(pl.LightningModule):
         return discrete_kl.sum() / (self.mc * self.batch_size)
 
         # variable prior didn't work well, so using fixed uniform prior instead
-        #prior_probs = torch.softmax(self.prior_logits, dim=0)  # [K]
-        #log_prior = torch.log(prior_probs + 1e-10).view(-1, 1, 1)
+        # prior_probs = torch.softmax(self.prior_logits, dim=0)  # [K]
+        # log_prior = torch.log(prior_probs + 1e-10).view(-1, 1, 1)
 
-        #log_p_y = torch.log(p_y + 1e-10)
+        # log_p_y = torch.log(p_y + 1e-10)
 
-        #kl = p_y * (log_p_y - log_prior)  # [K, M, B]
+        # kl = p_y * (log_p_y - log_prior)  # [K, M, B]
 
         # return kl.sum() / (self.mc * self.batch_size)
 
@@ -265,6 +314,7 @@ class GMVAE(pl.LightningModule):
     def hungarian_accuracy(self, generated_label: Tensor, true_label: Tensor) -> Tensor:
         """Clustering accuracy via Hungarian algorithm for optimal label matching."""
         from scipy.optimize import linear_sum_assignment
+
         labels = generated_label.argmax(1)
 
         C = torch.zeros(self.number_of_mixtures, NUMBER_OF_CLASSES, dtype=torch.int64)
@@ -333,4 +383,3 @@ class GMVAE(pl.LightningModule):
             (mean_z1, logvar_z1), (mean_z2, logvar_z2) = self.encoder(x)
             x_mean = self.decoder(mean_z1)
             return x_mean
-

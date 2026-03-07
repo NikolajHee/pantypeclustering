@@ -15,6 +15,7 @@ class ForwardOutput:
     prior_means: Tensor
     prior_logvars: Tensor
 
+
 def get_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Training options")
 

@@ -1,9 +1,11 @@
 """Convolutional encoder, decoder, and GMM prior for GMVAE."""
+
 from torch import Tensor, nn
 
 
 class Encoder(nn.Module):
     """CNN encoder mapping images to (z1, z2) latent parameters."""
+
     # Recogniser
     num_channels = 1  #  MNIST images are grayscale
     #  Number of filters for the convolutional layers

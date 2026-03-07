@@ -1,4 +1,3 @@
-
 import torch
 from sklearn.metrics import (
     adjusted_rand_score,
@@ -57,7 +56,7 @@ class GMVAE(nn.Module):
         dist = Normal(mean, torch.exp(0.5 * logvar))
         return dist.rsample((n,))
 
-    def _encoder(self ,x: Tensor) -> tuple[tuple[Tensor, Tensor], tuple[Tensor, Tensor]]:
+    def _encoder(self, x: Tensor) -> tuple[tuple[Tensor, Tensor], tuple[Tensor, Tensor]]:
         (mean_z1, logvar_z1), (mean_z2, logvar_z2) = self.encoder(x)
         logvar_z1 = self._clamp_logvar(logvar_z1)
         logvar_z2 = self._clamp_logvar(logvar_z2)
@@ -84,7 +83,7 @@ class GMVAE(nn.Module):
         z2_sample = z2_sample.view(self.mc, self.batch_size, self.w_size)
 
         means = torch.stack(
-            [mean.view(self.mc, self.batch_size, self.x_size) for mean in means]
+            [mean.view(self.mc, self.batch_size, self.x_size) for mean in means],
         )
         logvars = torch.stack(
             [logvar.view(self.mc, self.batch_size, self.x_size) for logvar in logvars],
@@ -97,7 +96,7 @@ class GMVAE(nn.Module):
             logvar_z2=logvar_z2,
             x_recon=x_recon,
             prior_means=means,
-            prior_logvars=logvars
+            prior_logvars=logvars,
         )
 
     def forward(self, x: Tensor) -> tuple[Tensor, Tensor]:
@@ -107,7 +106,7 @@ class GMVAE(nn.Module):
         p_y = self.gaussian_mixture(
             z1_sample=output.z1,
             means=output.prior_means,
-            logvars=output.prior_logvars
+            logvars=output.prior_logvars,
         )
 
         # 1.) reconstruction loss
@@ -227,7 +226,6 @@ class GMVAE(nn.Module):
 
     def get_class_prob(self, x: Tensor) -> Tensor:
         (mean_z1, logvar_z1), (mean_z2, logvar_z2) = self._encoder(x)
-
 
         z1_sample = self._rsample(mean=mean_z1, logvar=logvar_z1, n=1)
         z2_sample = self._rsample(mean=mean_z2, logvar=logvar_z2, n=1)

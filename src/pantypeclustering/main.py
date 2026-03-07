@@ -1,12 +1,11 @@
 """GMVAE training entrypoint for MNIST clustering."""
-import matplotlib.pyplot as plt
+
 import torch
-from loguru import logger
 from tqdm import tqdm
 
 from pantypeclustering.config import get_training_parameters
 from pantypeclustering.dataloader import get_mnist_dataloaders
-from pantypeclustering.models.model_old import GMVAE
+from pantypeclustering.model_pl import GMVAE
 
 
 def main(seed: int | None = None) -> None:
@@ -21,14 +20,19 @@ def main(seed: int | None = None) -> None:
         "cuda"
         if torch.cuda.is_available()
         else "mps"
-        if torch.backends.mps.is_available()
+        if hasattr(torch.backends, "mps") and torch.backends.mps.is_available()
         else "cpu",
     )
+    train_loader, test_loader = get_mnist_dataloaders(
+        batch_size=cfg.batch_size,
+        binarize=False,
+        seed=0,
+    )
+
+    alpha = 80.0
 
     model = GMVAE(
         x_size=cfg.x_size,
-        z1_size=cfg.z1_size,
-        z2_size=cfg.z2_size,
         z1_size=cfg.z1_size,
         z2_size=cfg.z2_size,
         hidden_size=cfg.hidden_size,
@@ -36,15 +40,14 @@ def main(seed: int | None = None) -> None:
         mc=cfg.mc,
         continuous=cfg.continuous,
         lambda_threshold=cfg.lambda_threshold,
+        learning_rate=cfg.learning_rate,
+        N=len(test_loader.dataset),
+        seed=seed,
+        alpha=alpha,
     )
 
     model.to(device)
 
-    train_loader, test_loader = get_mnist_dataloaders(
-        batch_size=cfg.batch_size,
-        binarize=False,
-        seed=0,
-    )
     optimizer = torch.optim.Adam(model.parameters(), lr=cfg.learning_rate)
 
     accuracy = torch.zeros(cfg.max_epochs)
@@ -59,9 +62,7 @@ def main(seed: int | None = None) -> None:
         test_loss = torch.zeros(len(test_loader))
 
         for i, (images, _) in tqdm(
-            enumerate(train_loader),
-            total=len(train_loader),
-            disable=disable_tqdm,
+            enumerate(train_loader), total=len(train_loader), disable=disable_tqdm
         ):
             optimizer.zero_grad()
             loss, (x, x_recon) = model(images.to(device))
@@ -90,14 +91,14 @@ def main(seed: int | None = None) -> None:
 
                 test_z1[start_idx:end_idx] = mean_z1
 
-                # Save sample images from first batch of each epoch
-                if i == 0:
-                    for j in range(min(10, len(x))):
-                        _, axs = plt.subplots(1, 2)
-                        axs[0].imshow(x[j].squeeze().detach().cpu().numpy(), cmap="gray")
-                        axs[1].imshow(x_recon[0][j].squeeze().detach().cpu().numpy(), cmap="gray")
-                        plt.savefig(f"img_sample{j}.png")
-                        plt.close()
+                # # Save sample images from first batch of each epoch
+                # if i == 0:
+                #     for j in range(min(10, len(x))):
+                #         _, axs = plt.subplots(1, 2)
+                #         axs[0].imshow(x[j].squeeze().detach().cpu().numpy(), cmap="gray")
+                #         axs[1].imshow(x_recon[0][j].squeeze().detach().cpu().numpy(), cmap="gray")
+                #         plt.savefig(f"img_sample{j}.png")
+                #         plt.close()
 
             acc = model.acc_evaluation(test_class_probs, test_label)
             db_score = model.get_db_score(test_z1, test_class_probs)
@@ -107,12 +108,16 @@ def main(seed: int | None = None) -> None:
         db_scores[epoch] = db_score
         adj_rand_scores[epoch] = adj_rand_score
 
-        print(f"Epoch [{epoch+1}/{cfg.max_epochs}], Test Loss: {test_loss.mean():.4f}, ACC: {acc:.4f}, DB: {db_score:.4f}, ADJ_RAND: {adj_rand_score}")
+        print(
+            f"Epoch [{epoch+1}/{cfg.max_epochs}], Test Loss: {test_loss.mean():.4f}, ACC: {acc:.4f}, DB: {db_score:.4f}, ADJ_RAND: {adj_rand_score}"
+        )
 
     # Save results
-    torch.save(accuracy, "accuracy.npy")
-    torch.save(db_scores, "db_scores.npy")
-    torch.save(adj_rand_scores, "adj_rand_scores.npy")
+    torch.save(accuracy, f"accuracy_{seed}_alpha_{alpha}.npy")
+    torch.save(db_scores, f"db_scores_{seed}_alpha_{alpha}.npy")
+    torch.save(adj_rand_scores, f"adj_rand_scores_{seed}_alpha_{alpha}.npy")
+
+    torch.save(model.state_dict(), f"model_{seed}_alpha_{alpha}.pth")
 
 
 if __name__ == "__main__":

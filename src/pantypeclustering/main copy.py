@@ -8,18 +8,18 @@ from pantypeclustering.model_copy import GMVAE
 
 
 def main() -> None:
-    """ Train the VAE model on MNIST dataset. """
-
+    """Train the VAE model on MNIST dataset."""
 
     cfg = get_training_parameters()
 
     torch.manual_seed(cfg.seed)
 
-
     device = torch.device(
-        "cuda" if torch.cuda.is_available()
-        else "mps" if hasattr(torch.backends, "mps") and torch.backends.mps.is_available()
-        else "cpu"
+        "cuda"
+        if torch.cuda.is_available()
+        else "mps"
+        if hasattr(torch.backends, "mps") and torch.backends.mps.is_available()
+        else "cpu",
     )
 
     model = GMVAE(
@@ -42,7 +42,6 @@ def main() -> None:
     )
     optimizer = torch.optim.Adam(model.parameters(), lr=cfg.learning_rate)
 
-
     loss_train_save = torch.zeros(cfg.max_epochs)
     loss_test_save = torch.zeros(cfg.max_epochs)
     accuracy = torch.zeros(cfg.max_epochs)
@@ -56,7 +55,9 @@ def main() -> None:
         train_loss = torch.zeros(len(train_loader))
         test_loss = torch.zeros(len(test_loader))
 
-        for i, (images, _) in tqdm(enumerate(train_loader), total=len(train_loader), disable=disable_tqdm):
+        for i, (images, _) in tqdm(
+            enumerate(train_loader), total=len(train_loader), disable=disable_tqdm
+        ):
             optimizer.zero_grad()
             loss, (y, y_recon) = model(images.to(device))
             loss.backward()
@@ -104,16 +105,17 @@ def main() -> None:
 
         loss_test_save[epoch] = test_loss.mean()
 
-        print(f"Epoch [{epoch+1}/{cfg.max_epochs}], Test Loss: {test_loss.mean():.4f}, ACC: {acc:.4f}, DB: {db_score:.4f}, ADJ; {adj_rand_score}")
+        print(
+            f"Epoch [{epoch+1}/{cfg.max_epochs}], Test Loss: {test_loss.mean():.4f}, ACC: {acc:.4f}, DB: {db_score:.4f}, ADJ; {adj_rand_score}"
+        )
 
     # Save model and results
-    #torch.save(model.state_dict(), "gmvae_mnist.pth")
-    #torch.save(loss_train_save, "avg_train.npy")
-    #torch.save(loss_test_save, "avg_test.npy")
-    torch.save(accuracy, f"accuracy.npy")
-    torch.save(db_scores, f"db_scores.npy")
-    torch.save(adj_rand_scores, f"adj_rand_scores.npy")
-
+    # torch.save(model.state_dict(), "gmvae_mnist.pth")
+    # torch.save(loss_train_save, "avg_train.npy")
+    # torch.save(loss_test_save, "avg_test.npy")
+    torch.save(accuracy, "accuracy.npy")
+    torch.save(db_scores, "db_scores.npy")
+    torch.save(adj_rand_scores, "adj_rand_scores.npy")
 
 
 if __name__ == "__main__":
